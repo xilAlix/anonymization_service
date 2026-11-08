@@ -1,10 +1,30 @@
 from pathlib import Path
+import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 import pandas as pd
 
 from data_processing.csv_handler import load_csv
+
+
+def enable_windows_dpi_awareness() -> None:
+    if sys.platform != "win32":
+        return
+
+    try:
+        import ctypes
+
+        # Per-Monitor V2 помогает Windows не растягивать окно bitmap-ом на мониторах с разным DPI.
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    except (AttributeError, OSError):
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except (AttributeError, OSError):
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except (AttributeError, OSError):
+                pass
 
 
 class TableViewer(tk.Tk):
@@ -21,6 +41,30 @@ class TableViewer(tk.Tk):
         self.open_example()
 
     def _build_widgets(self) -> None:
+        style = ttk.Style(self)
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+        style.configure(
+            "Treeview",
+            background="#FFFFFF",
+            fieldbackground="#FFFFFF",
+            foreground="#202938",
+            rowheight=27,
+            borderwidth=0,
+        )
+        style.configure(
+            "Treeview.Heading",
+            background="#DCE6F1",
+            foreground="#20334A",
+            font=("Segoe UI", 10, "bold"),
+            padding=(8, 7),
+            relief="flat",
+        )
+        style.map(
+            "Treeview.Heading",
+            background=[("active", "#C9D8E8")],
+        )
+
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
 
@@ -56,6 +100,8 @@ class TableViewer(tk.Tk):
         table_frame.rowconfigure(0, weight=1)
 
         self.table = ttk.Treeview(table_frame, show="headings")
+        self.table.tag_configure("row_even", background="#FFFFFF")
+        self.table.tag_configure("row_odd", background="#F1F5F9")
         vertical_scroll = ttk.Scrollbar(
             table_frame, orient="vertical", command=self.table.yview
         )
@@ -92,9 +138,10 @@ class TableViewer(tk.Tk):
 
         # GUI показывает ограниченное число строк, но DataFrame загружается целиком.
         preview = dataframe.head(self.preview_limit)
-        for row in preview.itertuples(index=False, name=None):
+        for row_number, row in enumerate(preview.itertuples(index=False, name=None)):
             values = ["" if pd.isna(value) else str(value) for value in row]
-            self.table.insert("", "end", values=values)
+            row_style = "row_even" if row_number % 2 == 0 else "row_odd"
+            self.table.insert("", "end", values=values, tags=(row_style,))
 
         row_count, column_count = dataframe.shape
         self.table_info.set(f"{file_name}  |  {row_count} строк × {column_count} столбцов")
