@@ -1,24 +1,29 @@
 import tkinter as tk
 from tkinter import ttk
 
+from data_processing.schema_inspector import ColumnTypeResult
+
+
+APP_BACKGROUND = "#F4F5F7"
+
 
 class ColumnTypesWindow(tk.Toplevel):
-    def __init__(self, parent: tk.Misc, column_types: list[tuple[str, str]]):
+    def __init__(
+        self,
+        parent: tk.Misc,
+        results: list[ColumnTypeResult],
+        nominal_detection_enabled: bool,
+    ):
         super().__init__(parent)
         self.title("Типы данных столбцов")
-        self.geometry("620x440")
-        self.minsize(460, 300)
+        self.geometry("780x460")
+        self.minsize(600, 320)
         self.transient(parent)
-
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
-
-        table_frame = ttk.Frame(self, padding=14)
-        table_frame.grid(row=0, column=0, sticky="nsew")
-        table_frame.columnconfigure(0, weight=1)
-        table_frame.rowconfigure(0, weight=1)
+        self.configure(background=APP_BACKGROUND)
 
         style = ttk.Style(self)
+        style.configure("ColumnTypes.TFrame", background=APP_BACKGROUND)
+        style.configure("ColumnTypes.TLabel", background=APP_BACKGROUND, foreground="#202938")
         style.configure(
             "ColumnTypes.Treeview",
             rowheight=28,
@@ -35,38 +40,77 @@ class ColumnTypesWindow(tk.Toplevel):
             relief="flat",
         )
 
+        container = ttk.Frame(self, padding=14, style="ColumnTypes.TFrame")
+        container.pack(fill="both", expand=True)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(0, weight=1)
+
+        columns = ("attribute", "dtype", "nominal", "unique")
         self.table = ttk.Treeview(
-            table_frame,
-            columns=("attribute", "dtype"),
+            container,
+            columns=columns,
             show="headings",
             style="ColumnTypes.Treeview",
         )
-        self.table.heading("attribute", text="Атрибут")
-        self.table.heading("dtype", text="Тип данных (Pandas)")
-        self.table.column("attribute", width=260, minwidth=150, anchor="w")
-        self.table.column("dtype", width=220, minwidth=140, anchor="w")
+        headings = {
+            "attribute": ("Атрибут", 210),
+            "dtype": ("Тип Pandas", 130),
+            "nominal": ("Номинальный", 130),
+            "unique": ("Уникальные значения", 190),
+        }
+        for column, (heading, width) in headings.items():
+            self.table.heading(column, text=heading)
+            self.table.column(column, width=width, minwidth=90, anchor="w")
+
         self.table.tag_configure("row_even", background="#FFFFFF")
         self.table.tag_configure("row_odd", background="#F1F5F9")
-
         scrollbar = ttk.Scrollbar(
-            table_frame, orient="vertical", command=self.table.yview
+            container,
+            orient="vertical",
+            command=self.table.yview,
         )
         self.table.configure(yscrollcommand=scrollbar.set)
         self.table.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
 
-        for index, (attribute, dtype) in enumerate(column_types):
+        for index, result in enumerate(results):
+            if result.is_nominal is None:
+                nominal = (
+                    "не проверялось"
+                    if not nominal_detection_enabled
+                    else "нет данных"
+                )
+            else:
+                nominal = "да" if result.is_nominal else "нет"
+            if result.unique_count is None:
+                unique = "не рассчитывалось"
+            elif result.unique_percent is None:
+                unique = f"{result.unique_count}/{result.non_null_count} (нет данных)"
+            else:
+                unique = (
+                    f"{result.unique_count}/{result.non_null_count} "
+                    f"({result.unique_percent:.2f}%)"
+                )
             tag = "row_even" if index % 2 == 0 else "row_odd"
             self.table.insert(
-                "", "end", values=(attribute, dtype), tags=(tag,)
+                "",
+                "end",
+                values=(result.attribute, result.pandas_type, nominal, unique),
+                tags=(tag,),
             )
 
+        explanation = (
+            "Номинальность определяется по доле "
+            "уникальных непустых значений."
+            if nominal_detection_enabled
+            else (
+                "Определение номинальных атрибутов "
+                "выключено в настройках."
+            )
+        )
         ttk.Label(
-            self,
-            text=(
-                "Показаны технические типы, определённые Pandas. "
-                "Семантическая роль атрибута здесь не определяется."
-            ),
-            wraplength=580,
-            padding=(14, 0, 14, 12),
-        ).grid(row=1, column=0, sticky="w")
+            container,
+            text=explanation,
+            wraplength=720,
+            style="ColumnTypes.TLabel",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(12, 0))
