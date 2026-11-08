@@ -5,7 +5,6 @@ import sys
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SRC_DIRECTORY = PROJECT_ROOT / "src"
 
-# Добавляем src в путь импорта, чтобы можно было запускать файл напрямую из корня проекта.
 if str(SRC_DIRECTORY) not in sys.path:
     sys.path.insert(0, str(SRC_DIRECTORY))
 

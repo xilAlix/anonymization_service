@@ -6,6 +6,9 @@ from tkinter import filedialog, messagebox, ttk
 import pandas as pd
 
 from data_processing.csv_handler import load_csv
+from data_processing.schema_inspector import get_column_types
+from interfaces.gui.column_types_window import ColumnTypesWindow
+from interfaces.gui.settings_window import SettingsWindow
 
 
 def enable_windows_dpi_awareness() -> None:
@@ -15,7 +18,7 @@ def enable_windows_dpi_awareness() -> None:
     try:
         import ctypes
 
-        # Per-Monitor V2 помогает Windows не растягивать окно bitmap-ом на мониторах с разным DPI.
+        # Per-Monitor V2 помогает Windows корректно отображать окно на мониторах с разным DPI.
         ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
     except (AttributeError, OSError):
         try:
@@ -33,12 +36,35 @@ class TableViewer(tk.Tk):
         self.example_path = example_path
         self.current_dataframe: pd.DataFrame | None = None
         self.preview_limit = 500
+        self.settings_window: SettingsWindow | None = None
+        self.column_types_window: ColumnTypesWindow | None = None
 
         self.title("Сервис анонимизации")
         self.geometry("1120x700")
         self.minsize(780, 480)
+        self._build_menu()
         self._build_widgets()
         self.open_example()
+
+    def _build_menu(self) -> None:
+        menu_bar = tk.Menu(self)
+
+        menu_bar.add_command(label="Настройки", command=self.open_settings)
+
+        operations_menu = tk.Menu(menu_bar, tearoff=False)
+        operations_menu.add_command(label="Открыть CSV-файл...", command=self.open_csv)
+        operations_menu.add_command(label="Загрузить пример", command=self.open_example)
+        operations_menu.add_separator()
+        operations_menu.add_command(
+            label="Определить типы данных",
+            command=self.show_column_types,
+            state="disabled",
+        )
+        self.operations_menu = operations_menu
+        self.types_menu_index = 3
+
+        menu_bar.add_cascade(label="Операции", menu=operations_menu)
+        self.config(menu=menu_bar)
 
     def _build_widgets(self) -> None:
         style = ttk.Style(self)
@@ -55,7 +81,7 @@ class TableViewer(tk.Tk):
         style.configure(
             "Treeview.Heading",
             background="#DCE6F1",
-            foreground="#20334A",
+            foreground="#64748B",
             font=("Segoe UI", 10, "bold"),
             padding=(8, 7),
             relief="flat",
@@ -89,10 +115,12 @@ class TableViewer(tk.Tk):
 
         self.table_info = tk.StringVar(value="Таблица не загружена")
         ttk.Label(toolbar, textvariable=self.table_info).pack(side="left", padx=(0, 12))
-        ttk.Button(toolbar, text="Открыть CSV", command=self.open_csv).pack(side="left", padx=(0, 7))
-        ttk.Button(toolbar, text="Открыть пример", command=self.open_example).pack(side="left", padx=(0, 7))
-        ttk.Button(toolbar, text="Анонимизировать", state="disabled").pack(side="left", padx=(10, 7))
-        ttk.Button(toolbar, text="Оценить результат", state="disabled").pack(side="left")
+        ttk.Button(toolbar, text="Анонимизировать", state="disabled").pack(
+            side="left", padx=(10, 7)
+        )
+        ttk.Button(toolbar, text="Оценить результат", state="disabled").pack(
+            side="left"
+        )
 
         table_frame = ttk.Frame(content)
         table_frame.grid(row=1, column=0, sticky="nsew")
@@ -117,7 +145,9 @@ class TableViewer(tk.Tk):
         vertical_scroll.grid(row=0, column=1, sticky="ns")
         horizontal_scroll.grid(row=1, column=0, sticky="ew")
 
-        self.status = tk.StringVar(value="Откройте CSV-файл или просмотрите подготовленный пример.")
+        self.status = tk.StringVar(
+            value="Откройте CSV-файл или загрузите подготовленный пример."
+        )
         ttk.Label(
             self,
             textvariable=self.status,
@@ -127,6 +157,9 @@ class TableViewer(tk.Tk):
         ).grid(row=3, column=0, sticky="ew")
 
     def _show_dataframe(self, dataframe: pd.DataFrame, file_name: str) -> None:
+        if self.column_types_window is not None and self.column_types_window.winfo_exists():
+            self.column_types_window.destroy()
+
         self.current_dataframe = dataframe
         columns = [str(column) for column in dataframe.columns]
         self.table.delete(*self.table.get_children())
@@ -136,13 +169,13 @@ class TableViewer(tk.Tk):
             self.table.heading(column, text=column)
             self.table.column(column, width=150, minwidth=90, anchor="w", stretch=True)
 
-        # GUI показывает ограниченное число строк, но DataFrame загружается целиком.
         preview = dataframe.head(self.preview_limit)
         for row_number, row in enumerate(preview.itertuples(index=False, name=None)):
             values = ["" if pd.isna(value) else str(value) for value in row]
             row_style = "row_even" if row_number % 2 == 0 else "row_odd"
             self.table.insert("", "end", values=values, tags=(row_style,))
 
+        self.operations_menu.entryconfig(self.types_menu_index, state="normal")
         row_count, column_count = dataframe.shape
         self.table_info.set(f"{file_name}  |  {row_count} строк × {column_count} столбцов")
         if row_count > self.preview_limit:
@@ -175,3 +208,19 @@ class TableViewer(tk.Tk):
         except (OSError, ValueError, pd.errors.ParserError) as error:
             messagebox.showerror("Ошибка открытия примера", str(error))
 
+    def open_settings(self) -> None:
+        if self.settings_window is not None and self.settings_window.winfo_exists():
+            self.settings_window.lift()
+            return
+        self.settings_window = SettingsWindow(self)
+
+    def show_column_types(self) -> None:
+        if self.current_dataframe is None:
+            messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.")
+            return
+
+        if self.column_types_window is not None and self.column_types_window.winfo_exists():
+            self.column_types_window.destroy()
+
+        column_types = get_column_types(self.current_dataframe)
+        self.column_types_window = ColumnTypesWindow(self, column_types)
