@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from data_processing.schema_inspector import ColumnTypeResult
+from interfaces.gui.tooltip import ToolTip
 
 
 APP_BACKGROUND = "#F4F5F7"
@@ -99,18 +100,17 @@ class ColumnTypesWindow(tk.Toplevel):
                 tags=(tag,),
             )
 
-        explanation = (
-            "Номинальность определяется по доле "
-            "уникальных непустых значений."
-            if nominal_detection_enabled
-            else (
-                "Определение номинальных атрибутов "
-                "выключено в настройках."
-            )
-        )
-        ttk.Label(
+        info = ttk.Label(
             container,
-            text=explanation,
-            wraplength=720,
+            text="ⓘ Справка по номинальности",
             style="ColumnTypes.TLabel",
-        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(12, 0))
+            cursor="question_arrow",
+        )
+        info.grid(row=1, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        explanation = (
+            "Номинальность определяется по доле уникальных непустых значений. "
+            "Эта эвристика не заменяет смысловую классификацию."
+            if nominal_detection_enabled
+            else "Определение номинальных атрибутов выключено в настройках."
+        )
+        ToolTip(info, explanation)

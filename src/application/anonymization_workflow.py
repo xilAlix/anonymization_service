@@ -62,6 +62,22 @@ def remove_manual_direct_identifiers(
         source_csv_path,
         profile_path,
     )
+    manual_overrides = load_manual_role_overrides(source_csv_path, profile_path)
+    analytical_columns = [
+        column
+        for column in selected_columns
+        if "analytical_attribute" in manual_overrides.get(column, [])
+    ]
+    if analytical_columns:
+        raise ValueError(
+            "Удаление отменено. Столбцы одновременно помечены как прямые "
+            "идентификаторы и аналитические атрибуты: "
+            + ", ".join(analytical_columns)
+            + ". Такие столбцы сохраняются, чтобы не потерять данные, "
+            "назначенные для аналитики. Для их защиты выберите токенизацию "
+            "или пересмотрите назначенные роли."
+        )
+
     return remove_identifier_columns(dataframe, selected_columns), selected_columns
 
 

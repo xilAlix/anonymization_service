@@ -17,6 +17,7 @@ from infrastructure.settings_manager import AppSettings, load_settings
 from interfaces.gui.attribute_classification_window import AttributeClassificationWindow
 from interfaces.gui.column_types_window import ColumnTypesWindow
 from interfaces.gui.settings_window import SettingsWindow
+from interfaces.gui.tooltip import ToolTip
 
 
 APP_BACKGROUND = "#F4F5F7"
@@ -107,13 +108,6 @@ class TableViewer(tk.Tk):
             state="disabled",
         )
         self.removal_menu_index = 7
-        operations_menu.add_separator()
-        operations_menu.add_command(
-            label="Анонимизировать по настройкам...",
-            command=self.anonymize_selected_operations,
-            state="disabled",
-        )
-        self.aggregate_menu_index = 9
         menu_bar.add_cascade(label="Операции", menu=operations_menu)
         self.config(menu=menu_bar)
 
@@ -162,6 +156,10 @@ class TableViewer(tk.Tk):
             state="disabled",
         )
         self.anonymize_button.pack(side="left", padx=(10, 7))
+        ToolTip(
+            self.anonymize_button,
+            "Запускает операции, выбранные в настройках суммарной анонимизации.",
+        )
         ttk.Button(
             toolbar,
             text="Оценить результат",
@@ -341,10 +339,6 @@ class TableViewer(tk.Tk):
             state=individual_state,
         )
         self.anonymize_button.configure(state=aggregate_state)
-        self.operations_menu.entryconfig(
-            self.aggregate_menu_index,
-            state=aggregate_state,
-        )
 
     def anonymize_selected_operations(self) -> None:
         selected_operations = []

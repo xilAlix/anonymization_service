@@ -4,6 +4,7 @@ from tkinter import messagebox, ttk
 
 import pandas as pd
 
+from interfaces.gui.tooltip import ToolTip
 from data_processing.attribute_classifier import (
     ROLE_LABELS,
     AttributeClassificationResult,
@@ -57,44 +58,46 @@ class AttributeRoleEditor(tk.Toplevel):
         content.pack(fill="both", expand=True)
         content.columnconfigure(0, weight=1)
 
-        ttk.Label(
+        roles_header = ttk.Label(
             content,
             text="Назначенные роли могут сочетаться.",
             style="RoleEditor.TLabel",
             font=("Segoe UI", 10, "bold"),
-        ).grid(row=0, column=0, sticky="w", pady=(0, 12))
+        )
+        roles_header.grid(row=0, column=0, sticky="w", pady=(0, 12))
+        ToolTip(
+            roles_header,
+            "Одному столбцу можно назначить несколько ролей, если это "
+            "соответствует его назначению и контексту анализа.",
+        )
 
+        role_tooltips = {
+            "direct_identifier": "Прямо указывает на субъекта данных, например ФИО или номер телефона.",
+            "quasi_identifier": "В сочетании с другими признаками или внешними сведениями может помочь определить субъекта.",
+            "sensitive_attribute": "Содержит сведения, раскрытие которых может навредить субъекту.",
+            "analytical_attribute": "Используется в конкретной аналитической задаче. Эта роль зависит от задачи.",
+        }
         for index, (role, label) in enumerate(ROLE_LABELS.items(), start=1):
-            ttk.Checkbutton(
+            role_check = ttk.Checkbutton(
                 content,
                 text=label,
                 variable=self._role_vars[role],
                 style="RoleEditor.TCheckbutton",
-            ).grid(row=index, column=0, sticky="w", pady=3)
+            )
+            role_check.grid(row=index, column=0, sticky="w", pady=3)
+            ToolTip(role_check, role_tooltips[role])
 
-        reasons = self._format_suggestions(suggestions)
-        ttk.Label(
+        reasons_info = ttk.Label(
             content,
-            text=reasons,
+            text="ⓘ Автоматические предложения и основания",
             style="RoleEditor.TLabel",
-            wraplength=460,
-            justify="left",
-        ).grid(row=5, column=0, sticky="w", pady=(16, 8))
-
-        ttk.Label(
-            content,
-            text=(
-                "Аналитическая роль зависит от конкретной задачи и автоматически "
-                "не назначается. Автоматические предложения являются эвристикой, "
-                "а не гарантированной классификацией."
-            ),
-            style="RoleEditor.TLabel",
-            wraplength=460,
-            justify="left",
-        ).grid(row=6, column=0, sticky="w", pady=(4, 0))
+            cursor="question_arrow",
+        )
+        reasons_info.grid(row=5, column=0, sticky="w", pady=(16, 8))
+        ToolTip(reasons_info, self._format_suggestions(suggestions))
 
         buttons = ttk.Frame(content, style="RoleEditor.TFrame")
-        buttons.grid(row=7, column=0, sticky="ew", pady=(18, 0))
+        buttons.grid(row=6, column=0, sticky="ew", pady=(18, 0))
         ttk.Button(buttons, text="Сбросить к автоматическим", command=self._reset).pack(
             side="left"
         )
@@ -111,7 +114,7 @@ class AttributeRoleEditor(tk.Toplevel):
         lines = ["Автоматические основания:"]
         for suggestion in suggestions:
             lines.append(
-                f"• {ROLE_LABELS[suggestion.role]} — эвристическая уверенность: {suggestion.confidence}"
+                f"• {ROLE_LABELS[suggestion.role]} – эвристическая уверенность: {suggestion.confidence}"
             )
             lines.extend(f"  {reason}" for reason in suggestion.reasons)
         return "\n".join(lines)
@@ -182,15 +185,18 @@ class AttributeClassificationWindow(tk.Toplevel):
         content.columnconfigure(0, weight=1)
         content.rowconfigure(1, weight=1)
 
-        ttk.Label(
+        instruction = ttk.Label(
             content,
-            text=(
-                "Автоматические предложения предварительные. Роли могут сочетаться; "
-                "аналитическая роль зависит от задачи и назначается вручную."
-            ),
+            text="Дважды щёлкните атрибут, чтобы изменить его роли.",
             style="Classification.TLabel",
-            wraplength=1050,
-        ).grid(row=0, column=0, sticky="w", pady=(0, 10))
+        )
+        instruction.grid(row=0, column=0, sticky="w", pady=(0, 10))
+        ToolTip(
+            instruction,
+            "Автоматические предложения основаны на эвристиках и не являются "
+            "гарантированной классификацией. Аналитическая роль зависит от "
+            "задачи и назначается вручную.",
+        )
 
         table_frame = ttk.Frame(content, style="Classification.TFrame")
         table_frame.grid(row=1, column=0, sticky="nsew")
@@ -224,14 +230,19 @@ class AttributeClassificationWindow(tk.Toplevel):
         self.table.bind("<<TreeviewSelect>>", self._selection_changed)
         self.table.bind("<Double-1>", self._edit_selected)
 
-        self.details = tk.StringVar(value="Выбери атрибут, чтобы увидеть основания классификации.")
-        ttk.Label(
+        self.details = tk.StringVar(value="ⓘ Основания автоматической классификации")
+        details_info = ttk.Label(
             content,
             textvariable=self.details,
             style="Classification.TLabel",
-            wraplength=1050,
-            justify="left",
-        ).grid(row=2, column=0, sticky="ew", pady=(10, 8))
+            cursor="question_arrow",
+        )
+        details_info.grid(row=2, column=0, sticky="w", pady=(10, 8))
+        self.details_tooltip = ToolTip(
+            details_info,
+            "Выберите атрибут в таблице, чтобы посмотреть основания "
+            "автоматического предложения.",
+        )
 
         actions = ttk.Frame(content, style="Classification.TFrame")
         actions.grid(row=3, column=0, sticky="ew")
@@ -277,16 +288,21 @@ class AttributeClassificationWindow(tk.Toplevel):
         selected = self.table.selection()
         self.edit_button.configure(state="normal" if selected else "disabled")
         if not selected:
+            self.details_tooltip.set_text(
+                "Выберите атрибут в таблице, чтобы посмотреть основания "
+                "автоматического предложения."
+            )
             return
+
         result = self._result_by_id[selected[0]]
         if result.suggestions:
             reasons = [
                 f"{ROLE_LABELS[item.role]} ({item.confidence}): " + " ".join(item.reasons)
                 for item in result.suggestions
             ]
-            self.details.set("\n".join(reasons))
+            self.details_tooltip.set_text("\n".join(reasons))
         else:
-            self.details.set(
+            self.details_tooltip.set_text(
                 "Автоматические предложения отсутствуют. Это не означает, "
                 "что атрибут безопасен или неважен для аналитики."
             )

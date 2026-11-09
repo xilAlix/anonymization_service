@@ -8,6 +8,7 @@ from infrastructure.settings_manager import (
     DataTypeAnalysisSettings,
     save_settings,
 )
+from interfaces.gui.tooltip import ToolTip
 
 
 APP_BACKGROUND = "#F4F5F7"
@@ -25,8 +26,8 @@ class SettingsWindow(tk.Toplevel):
         super().__init__(parent)
         self.on_save = on_save
         self.title("Настройки")
-        self.geometry("590x500")
-        self.minsize(520, 450)
+        self.resizable(False, False)
+        self.geometry("620x370")
         self.transient(parent)
         self.configure(background=APP_BACKGROUND)
 
@@ -64,22 +65,29 @@ class SettingsWindow(tk.Toplevel):
             text="Анализ типов данных",
             font=("Segoe UI", 12, "bold"),
             style="Settings.TLabel",
-        ).pack(anchor="w", pady=(0, 16))
+        ).pack(anchor="w", pady=(0, 12))
 
-        ttk.Checkbutton(
+        nominal_check = ttk.Checkbutton(
             container,
             text="Определение номинальных атрибутов",
             variable=self.detect_nominal,
             command=self._toggle_threshold,
             style="Settings.TCheckbutton",
-        ).pack(anchor="w")
+        )
+        nominal_check.pack(anchor="w")
+        ToolTip(
+            nominal_check,
+            "Эвристически отмечает столбцы по доле уникальных непустых значений. "
+            "Это не семантическая классификация атрибутов.",
+        )
 
         self.threshold_frame = ttk.Frame(container, style="Settings.TFrame")
-        ttk.Label(
+        threshold_label = ttk.Label(
             self.threshold_frame,
             text="Порог уникальных непустых значений, %:",
             style="Settings.TLabel",
-        ).pack(side="left")
+        )
+        threshold_label.pack(side="left")
         self.threshold_input = ttk.Spinbox(
             self.threshold_frame,
             from_=0,
@@ -89,17 +97,12 @@ class SettingsWindow(tk.Toplevel):
             width=8,
         )
         self.threshold_input.pack(side="left", padx=(10, 0))
-
-        ttk.Label(
-            container,
-            text=(
-                "Столбец считается номинальным, если доля "
-                "уникальных непустых значений не превышает "
-                "заданный процент."
-            ),
-            wraplength=490,
-            style="Settings.TLabel",
-        ).pack(anchor="w", pady=(12, 18))
+        threshold_help = (
+            "Максимальная доля уникальных непустых значений, при которой "
+            "столбец считается номинальным."
+        )
+        ToolTip(threshold_label, threshold_help)
+        ToolTip(self.threshold_input, threshold_help)
 
         anonymization_frame = tk.Frame(
             container,
@@ -111,18 +114,24 @@ class SettingsWindow(tk.Toplevel):
             padx=12,
             pady=10,
         )
-        anonymization_frame.pack(fill="x", anchor="w")
+        anonymization_frame.pack(fill="x", anchor="w", pady=(18, 0))
 
-        tk.Label(
+        anonymization_title = tk.Label(
             anonymization_frame,
-            text="Операции анонимизации",
+            text="Операции суммарной анонимизации",
             background=ANONYMIZATION_BACKGROUND,
             foreground="#20384D",
             font=("Segoe UI", 11, "bold"),
             anchor="w",
-        ).pack(fill="x", pady=(0, 6))
+        )
+        anonymization_title.pack(fill="x", pady=(0, 6))
+        ToolTip(
+            anonymization_title,
+            "Отмеченные операции запускаются кнопкой «Анонимизировать» "
+            "на главном окне. Отдельные операции доступны в меню «Операции».",
+        )
 
-        tk.Checkbutton(
+        tokenize_check = tk.Checkbutton(
             anonymization_frame,
             text="Токенизация прямых идентификаторов",
             variable=self.tokenize_direct_identifiers,
@@ -137,9 +146,15 @@ class SettingsWindow(tk.Toplevel):
             padx=2,
             pady=3,
             font=("Segoe UI", 10),
-        ).pack(fill="x")
+        )
+        tokenize_check.pack(fill="x")
+        ToolTip(
+            tokenize_check,
+            "Заменяет значения вручную назначенных прямых идентификаторов "
+            "токенами. Повторяющиеся значения в одном столбце получают один токен.",
+        )
 
-        tk.Checkbutton(
+        remove_check = tk.Checkbutton(
             anonymization_frame,
             text="Удаление столбцов с прямыми идентификаторами",
             variable=self.remove_direct_identifiers,
@@ -154,29 +169,16 @@ class SettingsWindow(tk.Toplevel):
             padx=2,
             pady=3,
             font=("Segoe UI", 10),
-        ).pack(fill="x")
-
-        tk.Label(
-            anonymization_frame,
-            text=(
-                "Эти флажки определяют только состав суммарной анонимизации "
-                "по кнопке «Анонимизировать». После загрузки таблицы отдельные "
-                "операции доступны через меню «Операции» независимо от выбора здесь. "
-                "Токенизация и удаление — альтернативные способы обработки "
-                "одних и тех же столбцов; одновременно выбрать их нельзя. "
-                "Обе операции применяются только к столбцам с вручную "
-                "назначенной ролью «Прямой идентификатор»."
-            ),
-            background=ANONYMIZATION_BACKGROUND,
-            foreground="#52677A",
-            justify="left",
-            anchor="w",
-            wraplength=480,
-            font=("Segoe UI", 9),
-        ).pack(fill="x", pady=(3, 0))
-
+        )
+        remove_check.pack(fill="x")
+        ToolTip(
+            remove_check,
+            "Удаляет целые столбцы с вручную назначенной ролью прямого "
+            "идентификатора. Если столбец также аналитический, удаление "
+            "будет отменено.",
+        )
         buttons = ttk.Frame(container, style="Settings.TFrame")
-        buttons.pack(side="bottom", fill="x", pady=(20, 0))
+        buttons.pack(side="bottom", fill="x", pady=(18, 0))
         ttk.Button(buttons, text="Сохранить", command=self._save).pack(side="right")
         ttk.Button(buttons, text="Отмена", command=self.destroy).pack(
             side="right", padx=(0, 8)
@@ -184,6 +186,13 @@ class SettingsWindow(tk.Toplevel):
 
         self._toggle_threshold()
         self.grab_set()
+        self.update_idletasks()
+        self._center_on_parent(parent)
+
+    def _center_on_parent(self, parent: tk.Misc) -> None:
+        x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{max(0, x)}+{max(0, y)}")
 
     def _on_tokenization_selected(self) -> None:
         if self.tokenize_direct_identifiers.get():
@@ -195,7 +204,7 @@ class SettingsWindow(tk.Toplevel):
 
     def _toggle_threshold(self) -> None:
         if self.detect_nominal.get():
-            self.threshold_frame.pack(fill="x", anchor="w", pady=(12, 0))
+            self.threshold_frame.pack(fill="x", anchor="w", pady=(10, 0))
         else:
             self.threshold_frame.pack_forget()
 
