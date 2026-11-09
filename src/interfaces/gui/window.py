@@ -5,7 +5,8 @@ from tkinter import filedialog, messagebox, ttk
 
 import pandas as pd
 
-from data_processing.csv_handler import load_csv
+from application.anonymization_workflow import anonymize_manual_direct_identifiers
+from data_processing.csv_handler import load_csv, save_csv
 from infrastructure.attribute_profile_store import load_manual_role_overrides, save_manual_role_overrides
 from data_processing.schema_inspector import analyze_column_types
 from infrastructure.settings_manager import AppSettings, load_settings
@@ -89,6 +90,13 @@ class TableViewer(tk.Tk):
             state="disabled",
         )
         self.classification_menu_index = 4
+        operations_menu.add_separator()
+        operations_menu.add_command(
+            label="Токенизировать прямые идентификаторы...",
+            command=self.tokenize_direct_identifiers,
+            state="disabled",
+        )
+        self.tokenization_menu_index = 6
         menu_bar.add_cascade(label="Операции", menu=operations_menu)
         self.config(menu=menu_bar)
 
@@ -130,9 +138,13 @@ class TableViewer(tk.Tk):
         ttk.Label(toolbar, textvariable=self.table_info, style="App.TLabel").pack(
             side="left", padx=(0, 12)
         )
-        ttk.Button(toolbar, text="Анонимизировать", state="disabled").pack(
-            side="left", padx=(10, 7)
+        self.anonymize_button = ttk.Button(
+            toolbar,
+            text="Анонимизировать",
+            command=self.tokenize_direct_identifiers,
+            state="disabled",
         )
+        self.anonymize_button.pack(side="left", padx=(10, 7))
         ttk.Button(
             toolbar,
             text="Оценить результат",
@@ -205,6 +217,8 @@ class TableViewer(tk.Tk):
 
         self.operations_menu.entryconfig(self.types_menu_index, state="normal")
         self.operations_menu.entryconfig(self.classification_menu_index, state="normal")
+        self.operations_menu.entryconfig(self.tokenization_menu_index, state="normal")
+        self.anonymize_button.configure(state="normal")
         row_count, column_count = dataframe.shape
         self.table_info.set(
             f"{source_path.name}  |  {row_count} строк × {column_count} столбцов"
@@ -288,6 +302,63 @@ class TableViewer(tk.Tk):
             analysis_settings.detect_nominal_attributes,
         )
 
+
+    def tokenize_direct_identifiers(self) -> None:
+        if self.current_dataframe is None or self.current_file_path is None:
+            messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.")
+            return
+
+        try:
+            anonymized_dataframe, tokenized_columns = anonymize_manual_direct_identifiers(
+                self.current_dataframe,
+                self.current_file_path,
+            )
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Невозможно выполнить токенизацию", str(error), parent=self)
+            return
+
+        output_path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Сохранить обработанную таблицу",
+            defaultextension=".csv",
+            initialfile=f"{self.current_file_path.stem}_tokenized.csv",
+            filetypes=(("CSV-файлы", "*.csv"),),
+        )
+        if not output_path:
+            return
+
+        destination = Path(output_path).resolve()
+        if destination == self.current_file_path.resolve():
+            messagebox.showerror(
+                "Недопустимый путь",
+                "Нельзя сохранять результат поверх исходной таблицы.",
+                parent=self,
+            )
+            return
+        if destination.exists() and not messagebox.askyesno(
+            "Перезапись файла",
+            f"Файл уже существует:\n{destination}\nПерезаписать его?",
+            parent=self,
+        ):
+            return
+
+        try:
+            save_csv(anonymized_dataframe, destination)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Ошибка сохранения", str(error), parent=self)
+            return
+
+        self.status.set(
+            "Токенизация завершена. Обработаны столбцы: "
+            + ", ".join(tokenized_columns)
+        )
+        messagebox.showinfo(
+            "Токенизация завершена",
+            "Результат сохранён в новый CSV-файл.\n\n"
+            "Важно: токенизация является псевдонимизацией и сама по себе "
+            "не гарантирует анонимность данных.",
+            parent=self,
+        )
 
     def show_attribute_classification(self) -> None:
         if self.current_dataframe is None or self.current_file_path is None:

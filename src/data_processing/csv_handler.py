@@ -26,3 +26,10 @@ def load_csv(file_path: str | Path) -> pd.DataFrame:
     raise ValueError(
         "Не удалось прочитать CSV. Проверь кодировку, разделитель и структуру файла."
     ) from last_error
+
+
+def save_csv(dataframe: pd.DataFrame, file_path: str | Path) -> None:
+    path = Path(file_path)
+    if not path.parent.exists():
+        raise FileNotFoundError(f"Папка для сохранения не существует: {path.parent}")
+    dataframe.to_csv(path, index=False, encoding="utf-8-sig")
