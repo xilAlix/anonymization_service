@@ -33,3 +33,7 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Локальные данные классификации и контекст передачи в другой чат
+/PROJECT_CONTEXT.md
+/data/metadata/*.json

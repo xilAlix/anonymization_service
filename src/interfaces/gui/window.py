@@ -6,8 +6,10 @@ from tkinter import filedialog, messagebox, ttk
 import pandas as pd
 
 from data_processing.csv_handler import load_csv
+from infrastructure.attribute_profile_store import load_manual_role_overrides, save_manual_role_overrides
 from data_processing.schema_inspector import analyze_column_types
 from infrastructure.settings_manager import AppSettings, load_settings
+from interfaces.gui.attribute_classification_window import AttributeClassificationWindow
 from interfaces.gui.column_types_window import ColumnTypesWindow
 from interfaces.gui.settings_window import SettingsWindow
 
@@ -48,10 +50,12 @@ class TableViewer(tk.Tk):
         super().__init__()
         self.example_path = example_path
         self.current_dataframe: pd.DataFrame | None = None
+        self.current_file_path: Path | None = None
         self.preview_limit = 500
         self.settings = load_settings()
         self.settings_window: SettingsWindow | None = None
         self.column_types_window: ColumnTypesWindow | None = None
+        self.attribute_classification_window: AttributeClassificationWindow | None = None
 
         self.title("Сервис анонимизации")
         self.geometry("1120x700")
@@ -79,6 +83,12 @@ class TableViewer(tk.Tk):
         )
         self.operations_menu = operations_menu
         self.types_menu_index = 3
+        operations_menu.add_command(
+            label="Классифицировать атрибуты",
+            command=self.show_attribute_classification,
+            state="disabled",
+        )
+        self.classification_menu_index = 4
         menu_bar.add_cascade(label="Операции", menu=operations_menu)
         self.config(menu=menu_bar)
 
@@ -162,14 +172,20 @@ class TableViewer(tk.Tk):
             padding=(8, 4),
         ).grid(row=1, column=0, sticky="ew")
 
-    def _show_dataframe(self, dataframe: pd.DataFrame, file_name: str) -> None:
+    def _show_dataframe(self, dataframe: pd.DataFrame, source_path: Path) -> None:
         if (
             self.column_types_window is not None
             and self.column_types_window.winfo_exists()
         ):
             self.column_types_window.destroy()
+        if (
+            self.attribute_classification_window is not None
+            and self.attribute_classification_window.winfo_exists()
+        ):
+            self.attribute_classification_window.destroy()
 
         self.current_dataframe = dataframe
+        self.current_file_path = source_path.resolve()
         columns = [str(column) for column in dataframe.columns]
         self.table.delete(*self.table.get_children())
         self.table.configure(columns=columns)
@@ -188,9 +204,10 @@ class TableViewer(tk.Tk):
             self.table.insert("", "end", values=values, tags=(row_style,))
 
         self.operations_menu.entryconfig(self.types_menu_index, state="normal")
+        self.operations_menu.entryconfig(self.classification_menu_index, state="normal")
         row_count, column_count = dataframe.shape
         self.table_info.set(
-            f"{file_name}  |  {row_count} строк × {column_count} столбцов"
+            f"{source_path.name}  |  {row_count} строк × {column_count} столбцов"
         )
         if row_count > self.preview_limit:
             self.status.set(
@@ -208,8 +225,9 @@ class TableViewer(tk.Tk):
             return
 
         try:
-            dataframe = load_csv(selected_file)
-            self._show_dataframe(dataframe, Path(selected_file).name)
+            source_path = Path(selected_file)
+            dataframe = load_csv(source_path)
+            self._show_dataframe(dataframe, source_path)
         except (OSError, ValueError, pd.errors.ParserError) as error:
             messagebox.showerror("Ошибка открытия файла", str(error))
             self.status.set("Не удалось загрузить выбранный файл.")
@@ -217,7 +235,7 @@ class TableViewer(tk.Tk):
     def open_example(self) -> None:
         try:
             dataframe = load_csv(self.example_path)
-            self._show_dataframe(dataframe, self.example_path.name)
+            self._show_dataframe(dataframe, self.example_path)
         except (OSError, ValueError, pd.errors.ParserError) as error:
             messagebox.showerror("Ошибка открытия примера", str(error))
 
@@ -268,4 +286,39 @@ class TableViewer(tk.Tk):
             self,
             results,
             analysis_settings.detect_nominal_attributes,
+        )
+
+
+    def show_attribute_classification(self) -> None:
+        if self.current_dataframe is None or self.current_file_path is None:
+            messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.")
+            return
+
+        if (
+            self.attribute_classification_window is not None
+            and self.attribute_classification_window.winfo_exists()
+        ):
+            self.attribute_classification_window.lift()
+            return
+
+        try:
+            manual_overrides = load_manual_role_overrides(self.current_file_path)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Ошибка профиля атрибутов", str(error))
+            return
+
+        def persist_overrides(overrides: dict[str, list[str]]) -> bool:
+            try:
+                save_manual_role_overrides(self.current_file_path, overrides)
+            except (OSError, ValueError) as error:
+                messagebox.showerror("Ошибка сохранения ролей", str(error), parent=self)
+                return False
+            self.status.set("Ручные назначения атрибутов сохранены.")
+            return True
+
+        self.attribute_classification_window = AttributeClassificationWindow(
+            self,
+            self.current_dataframe,
+            manual_overrides,
+            persist_overrides,
         )
