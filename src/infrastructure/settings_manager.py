@@ -15,8 +15,14 @@ class DataTypeAnalysisSettings:
 
 
 @dataclass(frozen=True)
+class AnonymizationSettings:
+    tokenize_direct_identifiers: bool = True
+
+
+@dataclass(frozen=True)
 class AppSettings:
     data_type_analysis: DataTypeAnalysisSettings = DataTypeAnalysisSettings()
+    anonymization: AnonymizationSettings = AnonymizationSettings()
 
 
 def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
@@ -32,14 +38,11 @@ def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
         ) from error
 
     if not isinstance(raw, dict):
-        raise ValueError(
-            "Корень файла настроек должен быть JSON-объектом."
-        )
+        raise ValueError("Корень файла настроек должен быть JSON-объектом.")
+
     analysis = raw.get("data_type_analysis", {})
     if not isinstance(analysis, dict):
-        raise ValueError(
-            "Раздел data_type_analysis должен быть JSON-объектом."
-        )
+        raise ValueError("Раздел data_type_analysis должен быть JSON-объектом.")
 
     enabled = analysis.get("detect_nominal_attributes", False)
     raw_threshold = analysis.get("nominal_unique_threshold_percent", 10.0)
@@ -48,31 +51,43 @@ def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
             "Параметр detect_nominal_attributes должен быть логическим."
         )
     if isinstance(raw_threshold, bool):
-        raise ValueError(
-            "Порог уникальных значений должен быть "
-            "числом от 0 до 100."
-        )
+        raise ValueError("Порог уникальных значений должен быть числом от 0 до 100.")
 
     try:
         threshold = float(raw_threshold)
     except (TypeError, ValueError) as error:
         raise ValueError(
-            "Порог уникальных значений должен быть "
-            "числом от 0 до 100."
+            "Порог уникальных значений должен быть числом от 0 до 100."
         ) from error
 
     if not math.isfinite(threshold) or not 0 <= threshold <= 100:
         raise ValueError(
-            "Порог уникальных значений должен находиться "
-            "в диапазоне от 0 до 100."
+            "Порог уникальных значений должен находиться в диапазоне от 0 до 100."
+        )
+
+    anonymization = raw.get("anonymization", {})
+    if not isinstance(anonymization, dict):
+        raise ValueError("Раздел anonymization должен быть JSON-объектом.")
+
+    tokenize_direct_identifiers = anonymization.get(
+        "tokenize_direct_identifiers",
+        True,
+    )
+    if not isinstance(tokenize_direct_identifiers, bool):
+        raise ValueError(
+            "Параметр tokenize_direct_identifiers должен быть логическим."
         )
 
     return AppSettings(
         data_type_analysis=DataTypeAnalysisSettings(
             detect_nominal_attributes=enabled,
             nominal_unique_threshold_percent=threshold,
-        )
+        ),
+        anonymization=AnonymizationSettings(
+            tokenize_direct_identifiers=tokenize_direct_identifiers,
+        ),
     )
+
 
 def save_settings(settings: AppSettings, path: str | Path = DEFAULT_SETTINGS_PATH) -> None:
     settings_path = Path(path)
@@ -81,17 +96,31 @@ def save_settings(settings: AppSettings, path: str | Path = DEFAULT_SETTINGS_PAT
         raise ValueError(
             "Параметр detect_nominal_attributes должен быть логическим."
         )
+    if isinstance(threshold, bool):
+        raise ValueError("Порог уникальных значений должен быть числом от 0 до 100.")
+    try:
+        threshold = float(threshold)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "Порог уникальных значений должен быть числом от 0 до 100."
+        ) from error
     if not math.isfinite(threshold) or not 0 <= threshold <= 100:
         raise ValueError(
-            "Порог уникальных значений должен находиться "
-            "в диапазоне от 0 до 100."
+            "Порог уникальных значений должен находиться в диапазоне от 0 до 100."
+        )
+    if not isinstance(settings.anonymization.tokenize_direct_identifiers, bool):
+        raise ValueError(
+            "Параметр tokenize_direct_identifiers должен быть логическим."
         )
 
     payload = {
         "data_type_analysis": {
             "detect_nominal_attributes": settings.data_type_analysis.detect_nominal_attributes,
             "nominal_unique_threshold_percent": threshold,
-        }
+        },
+        "anonymization": {
+            "tokenize_direct_identifiers": settings.anonymization.tokenize_direct_identifiers,
+        },
     }
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = settings_path.with_suffix(settings_path.suffix + ".tmp")

@@ -2,5 +2,8 @@
   "data_type_analysis": {
     "detect_nominal_attributes": false,
     "nominal_unique_threshold_percent": 10.0
+  },
+  "anonymization": {
+    "tokenize_direct_identifiers": true
   }
 }

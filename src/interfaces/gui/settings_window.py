@@ -3,6 +3,7 @@ from collections.abc import Callable
 from tkinter import messagebox, ttk
 
 from infrastructure.settings_manager import (
+    AnonymizationSettings,
     AppSettings,
     DataTypeAnalysisSettings,
     save_settings,
@@ -10,6 +11,8 @@ from infrastructure.settings_manager import (
 
 
 APP_BACKGROUND = "#F4F5F7"
+ANONYMIZATION_BACKGROUND = "#EAF2F8"
+ANONYMIZATION_BORDER = "#9DB7CE"
 
 
 class SettingsWindow(tk.Toplevel):
@@ -22,8 +25,8 @@ class SettingsWindow(tk.Toplevel):
         super().__init__(parent)
         self.on_save = on_save
         self.title("Настройки")
-        self.geometry("540x300")
-        self.minsize(460, 260)
+        self.geometry("560x430")
+        self.minsize(500, 400)
         self.transient(parent)
         self.configure(background=APP_BACKGROUND)
 
@@ -45,6 +48,9 @@ class SettingsWindow(tk.Toplevel):
         )
         self.threshold = tk.StringVar(
             value=f"{settings.data_type_analysis.nominal_unique_threshold_percent:g}"
+        )
+        self.tokenize_direct_identifiers = tk.BooleanVar(
+            value=settings.anonymization.tokenize_direct_identifiers
         )
 
         container = ttk.Frame(self, padding=18, style="Settings.TFrame")
@@ -90,7 +96,59 @@ class SettingsWindow(tk.Toplevel):
             ),
             wraplength=490,
             style="Settings.TLabel",
-        ).pack(anchor="w", pady=(12, 0))
+        ).pack(anchor="w", pady=(12, 18))
+
+        anonymization_frame = tk.Frame(
+            container,
+            background=ANONYMIZATION_BACKGROUND,
+            highlightthickness=1,
+            highlightbackground=ANONYMIZATION_BORDER,
+            highlightcolor=ANONYMIZATION_BORDER,
+            bd=0,
+            padx=12,
+            pady=10,
+        )
+        anonymization_frame.pack(fill="x", anchor="w")
+
+        tk.Label(
+            anonymization_frame,
+            text="Операции анонимизации",
+            background=ANONYMIZATION_BACKGROUND,
+            foreground="#20384D",
+            font=("Segoe UI", 11, "bold"),
+            anchor="w",
+        ).pack(fill="x", pady=(0, 6))
+
+        tk.Checkbutton(
+            anonymization_frame,
+            text="Токенизация прямых идентификаторов",
+            variable=self.tokenize_direct_identifiers,
+            background=ANONYMIZATION_BACKGROUND,
+            foreground="#20384D",
+            activebackground=ANONYMIZATION_BACKGROUND,
+            activeforeground="#20384D",
+            selectcolor="#FFFFFF",
+            anchor="w",
+            justify="left",
+            padx=2,
+            pady=3,
+            font=("Segoe UI", 10),
+        ).pack(fill="x")
+
+        tk.Label(
+            anonymization_frame,
+            text=(
+                "Заменяет значения столбцов, которым вручную назначена "
+                "роль «Прямой идентификатор». Если не выбрана ни одна "
+                "операция, кнопка «Анонимизировать» будет недоступна."
+            ),
+            background=ANONYMIZATION_BACKGROUND,
+            foreground="#52677A",
+            justify="left",
+            anchor="w",
+            wraplength=480,
+            font=("Segoe UI", 9),
+        ).pack(fill="x", pady=(3, 0))
 
         buttons = ttk.Frame(container, style="Settings.TFrame")
         buttons.pack(side="bottom", fill="x", pady=(20, 0))
@@ -131,12 +189,18 @@ class SettingsWindow(tk.Toplevel):
             data_type_analysis=DataTypeAnalysisSettings(
                 detect_nominal_attributes=self.detect_nominal.get(),
                 nominal_unique_threshold_percent=threshold,
-            )
+            ),
+            anonymization=AnonymizationSettings(
+                tokenize_direct_identifiers=self.tokenize_direct_identifiers.get(),
+            ),
         )
         try:
             save_settings(settings)
         except OSError as error:
             messagebox.showerror("Ошибка сохранения", str(error), parent=self)
+            return
+        except ValueError as error:
+            messagebox.showerror("Некорректные настройки", str(error), parent=self)
             return
 
         self.on_save(settings)

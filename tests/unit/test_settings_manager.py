@@ -10,6 +10,7 @@ if str(SRC_DIRECTORY) not in sys.path:
     sys.path.insert(0, str(SRC_DIRECTORY))
 
 from infrastructure.settings_manager import (
+    AnonymizationSettings,
     AppSettings,
     DataTypeAnalysisSettings,
     load_settings,
@@ -35,6 +36,41 @@ class SettingsManagerTests(unittest.TestCase):
                 }}),
                 encoding="utf-8",
             )
+            with self.assertRaises(ValueError):
+                load_settings(path)
+
+    def test_legacy_settings_keep_existing_anonymization_enabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                json.dumps({"data_type_analysis": {}}),
+                encoding="utf-8",
+            )
+
+            settings = load_settings(path)
+
+            self.assertTrue(settings.anonymization.tokenize_direct_identifiers)
+
+    def test_anonymization_operation_setting_roundtrips(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            expected = AppSettings(
+                data_type_analysis=DataTypeAnalysisSettings(True, 12.5),
+                anonymization=AnonymizationSettings(False),
+            )
+
+            save_settings(expected, path)
+
+            self.assertEqual(load_settings(path), expected)
+
+    def test_invalid_anonymization_setting_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                json.dumps({"anonymization": {"tokenize_direct_identifiers": "yes"}}),
+                encoding="utf-8",
+            )
+
             with self.assertRaises(ValueError):
                 load_settings(path)
 
