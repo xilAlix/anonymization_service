@@ -9,7 +9,10 @@ SRC_DIRECTORY = PROJECT_ROOT / "src"
 if str(SRC_DIRECTORY) not in sys.path:
     sys.path.insert(0, str(SRC_DIRECTORY))
 
-from application.anonymization_workflow import anonymize_manual_direct_identifiers
+from application.anonymization_workflow import (
+    anonymize_manual_direct_identifiers,
+    remove_manual_direct_identifiers,
+)
 from data_processing.attribute_classifier import (
     ROLE_LABELS,
     classify_attributes,
@@ -109,7 +112,7 @@ def _format_attribute_classification(csv_path: Path) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="Сервис анонимизации",
-        description="Просмотр, классификация и токенизация CSV-таблиц.",
+        description="Просмотр, классификация, токенизация и удаление идентификаторов в CSV.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -151,6 +154,18 @@ def build_parser() -> argparse.ArgumentParser:
     anonymize_parser.add_argument("input_csv", type=Path, help="Исходный CSV.")
     anonymize_parser.add_argument("output_csv", type=Path, help="Новый CSV для результата.")
     anonymize_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Разрешить перезапись существующего выходного файла.",
+    )
+
+    remove_parser = subparsers.add_parser(
+        "remove-direct-identifiers",
+        help="Удалить столбцы с вручную назначенной ролью прямого идентификатора.",
+    )
+    remove_parser.add_argument("input_csv", type=Path, help="Исходный CSV.")
+    remove_parser.add_argument("output_csv", type=Path, help="Новый CSV для результата.")
+    remove_parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Разрешить перезапись существующего выходного файла.",
@@ -214,7 +229,7 @@ def run_cli(arguments: list[str]) -> int:
             print(f"Профиль: {PROFILE_PATH}")
             return 0
 
-        if args.command == "anonymize":
+        if args.command in {"anonymize", "remove-direct-identifiers"}:
             input_path = args.input_csv.resolve()
             output_path = args.output_csv.resolve()
             if input_path == output_path:
@@ -226,18 +241,27 @@ def run_cli(arguments: list[str]) -> int:
                 )
 
             dataframe = load_csv(input_path)
-            anonymized_dataframe, tokenized_columns = anonymize_manual_direct_identifiers(
-                dataframe,
-                input_path,
-                PROFILE_PATH,
-            )
-            save_csv(anonymized_dataframe, output_path)
+            if args.command == "anonymize":
+                result_dataframe, affected_columns = anonymize_manual_direct_identifiers(
+                    dataframe,
+                    input_path,
+                    PROFILE_PATH,
+                )
+                print("Токенизированные столбцы: " + ", ".join(affected_columns))
+                print(
+                    "Важно: токенизация является псевдонимизацией и сама по себе "
+                    "не гарантирует анонимность набора данных."
+                )
+            else:
+                result_dataframe, affected_columns = remove_manual_direct_identifiers(
+                    dataframe,
+                    input_path,
+                    PROFILE_PATH,
+                )
+                print("Удалённые столбцы: " + ", ".join(affected_columns))
+
+            save_csv(result_dataframe, output_path)
             print(f"Результат сохранён: {output_path}")
-            print("Токенизированные столбцы: " + ", ".join(tokenized_columns))
-            print(
-                "Важно: токенизация является псевдонимизацией и сама по себе "
-                "не гарантирует анонимность набора данных."
-            )
             return 0
 
     except (OSError, ValueError, pd.errors.ParserError) as error:

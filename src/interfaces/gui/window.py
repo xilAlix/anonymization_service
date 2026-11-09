@@ -5,7 +5,11 @@ from tkinter import filedialog, messagebox, ttk
 
 import pandas as pd
 
-from application.anonymization_workflow import anonymize_manual_direct_identifiers
+from application.anonymization_workflow import (
+    REMOVE_DIRECT_IDENTIFIERS,
+    TOKENIZE_DIRECT_IDENTIFIERS,
+    apply_anonymization_operations,
+)
 from data_processing.csv_handler import load_csv, save_csv
 from infrastructure.attribute_profile_store import load_manual_role_overrides, save_manual_role_overrides
 from data_processing.schema_inspector import analyze_column_types
@@ -93,10 +97,23 @@ class TableViewer(tk.Tk):
         operations_menu.add_separator()
         operations_menu.add_command(
             label="Токенизировать прямые идентификаторы...",
-            command=self.anonymize_selected_operations,
+            command=self.tokenize_direct_identifiers,
             state="disabled",
         )
         self.tokenization_menu_index = 6
+        operations_menu.add_command(
+            label="Удалить столбцы с прямыми идентификаторами...",
+            command=self.remove_direct_identifiers,
+            state="disabled",
+        )
+        self.removal_menu_index = 7
+        operations_menu.add_separator()
+        operations_menu.add_command(
+            label="Анонимизировать по настройкам...",
+            command=self.anonymize_selected_operations,
+            state="disabled",
+        )
+        self.aggregate_menu_index = 9
         menu_bar.add_cascade(label="Операции", menu=operations_menu)
         self.config(menu=menu_bar)
 
@@ -302,50 +319,88 @@ class TableViewer(tk.Tk):
 
 
     def _update_anonymization_controls(self) -> None:
-        operation_selected = (
-            self.settings.anonymization.tokenize_direct_identifiers
-        )
         table_loaded = (
             self.current_dataframe is not None
             and self.current_file_path is not None
         )
-        state = "normal" if operation_selected and table_loaded else "disabled"
-        self.anonymize_button.configure(state=state)
-        self.operations_menu.entryconfig(self.tokenization_menu_index, state=state)
+        aggregate_selected = (
+            self.settings.anonymization.tokenize_direct_identifiers
+            or self.settings.anonymization.remove_direct_identifiers
+        )
+
+        individual_state = "normal" if table_loaded else "disabled"
+        aggregate_state = (
+            "normal" if table_loaded and aggregate_selected else "disabled"
+        )
+        self.operations_menu.entryconfig(
+            self.tokenization_menu_index,
+            state=individual_state,
+        )
+        self.operations_menu.entryconfig(
+            self.removal_menu_index,
+            state=individual_state,
+        )
+        self.anonymize_button.configure(state=aggregate_state)
+        self.operations_menu.entryconfig(
+            self.aggregate_menu_index,
+            state=aggregate_state,
+        )
 
     def anonymize_selected_operations(self) -> None:
-        if self.current_dataframe is None or self.current_file_path is None:
-            messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.")
-            return
-
         selected_operations = []
         if self.settings.anonymization.tokenize_direct_identifiers:
-            selected_operations.append("tokenize_direct_identifiers")
+            selected_operations.append(TOKENIZE_DIRECT_IDENTIFIERS)
+        if self.settings.anonymization.remove_direct_identifiers:
+            selected_operations.append(REMOVE_DIRECT_IDENTIFIERS)
 
         if not selected_operations:
             messagebox.showwarning(
                 "Операции не выбраны",
-                "В настройках не выбрана ни одна операция анонимизации.",
+                "В настройках не выбрана ни одна операция для суммарной "
+                "анонимизации. Отдельные операции доступны в меню «Операции».",
                 parent=self,
             )
-            self._update_anonymization_controls()
             return
 
-        anonymized_dataframe = self.current_dataframe.copy(deep=True)
-        tokenized_columns: list[str] = []
+        self._execute_anonymization(
+            selected_operations,
+            output_suffix="_anonymized",
+            title="Сохранить результат суммарной анонимизации",
+        )
+
+    def tokenize_direct_identifiers(self) -> None:
+        self._execute_anonymization(
+            [TOKENIZE_DIRECT_IDENTIFIERS],
+            output_suffix="_tokenized",
+            title="Сохранить таблицу с токенизированными идентификаторами",
+        )
+
+    def remove_direct_identifiers(self) -> None:
+        self._execute_anonymization(
+            [REMOVE_DIRECT_IDENTIFIERS],
+            output_suffix="_without_identifiers",
+            title="Сохранить таблицу без прямых идентификаторов",
+        )
+
+    def _execute_anonymization(
+        self,
+        operations: list[str],
+        output_suffix: str,
+        title: str,
+    ) -> None:
+        if self.current_dataframe is None or self.current_file_path is None:
+            messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.")
+            return
 
         try:
-            for operation in selected_operations:
-                if operation == "tokenize_direct_identifiers":
-                    anonymized_dataframe, tokenized_columns = (
-                        anonymize_manual_direct_identifiers(
-                            anonymized_dataframe,
-                            self.current_file_path,
-                        )
-                    )
+            result, affected_columns, operation = apply_anonymization_operations(
+                self.current_dataframe,
+                self.current_file_path,
+                operations,
+            )
         except (OSError, ValueError) as error:
             messagebox.showerror(
-                "Невозможно выполнить анонимизацию",
+                "Невозможно выполнить операцию",
                 str(error),
                 parent=self,
             )
@@ -353,9 +408,9 @@ class TableViewer(tk.Tk):
 
         output_path = filedialog.asksaveasfilename(
             parent=self,
-            title="Сохранить анонимизированную таблицу",
+            title=title,
             defaultextension=".csv",
-            initialfile=f"{self.current_file_path.stem}_anonymized.csv",
+            initialfile=f"{self.current_file_path.stem}{output_suffix}.csv",
             filetypes=(("CSV-файлы", "*.csv"),),
         )
         if not output_path:
@@ -377,20 +432,34 @@ class TableViewer(tk.Tk):
             return
 
         try:
-            save_csv(anonymized_dataframe, destination)
+            save_csv(result, destination)
         except (OSError, ValueError) as error:
             messagebox.showerror("Ошибка сохранения", str(error), parent=self)
             return
 
+        if operation == TOKENIZE_DIRECT_IDENTIFIERS:
+            operation_title = "Токенизированы столбцы"
+            success_text = (
+                "Значения прямых идентификаторов заменены токенами. "
+                "Токенизация является псевдонимизацией и сама по себе "
+                "не гарантирует анонимность данных."
+            )
+        else:
+            operation_title = "Удалены столбцы"
+            success_text = (
+                "Столбцы с вручную назначенной ролью «Прямой идентификатор» "
+                "удалены из результирующей таблицы. Исходный CSV не изменён."
+            )
+
+        columns_text = ", ".join(affected_columns)
         self.status.set(
-            "Анонимизация завершена. Токенизированы столбцы: "
-            + ", ".join(tokenized_columns)
+            f"Операция завершена. {operation_title.lower()}: {columns_text}. "
+            f"Результат: {destination.name}"
         )
         messagebox.showinfo(
-            "Анонимизация завершена",
-            "Результат сохранён в новый CSV-файл.\n\n"
-            "Важно: токенизация является псевдонимизацией и сама по себе "
-            "не гарантирует анонимность данных.",
+            "Операция завершена",
+            f"{success_text}\n\n{operation_title}: {columns_text}\n"
+            f"Результат сохранён: {destination}",
             parent=self,
         )
 

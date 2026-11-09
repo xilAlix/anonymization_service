@@ -25,8 +25,8 @@ class SettingsWindow(tk.Toplevel):
         super().__init__(parent)
         self.on_save = on_save
         self.title("Настройки")
-        self.geometry("560x430")
-        self.minsize(500, 400)
+        self.geometry("590x500")
+        self.minsize(520, 450)
         self.transient(parent)
         self.configure(background=APP_BACKGROUND)
 
@@ -51,6 +51,9 @@ class SettingsWindow(tk.Toplevel):
         )
         self.tokenize_direct_identifiers = tk.BooleanVar(
             value=settings.anonymization.tokenize_direct_identifiers
+        )
+        self.remove_direct_identifiers = tk.BooleanVar(
+            value=settings.anonymization.remove_direct_identifiers
         )
 
         container = ttk.Frame(self, padding=18, style="Settings.TFrame")
@@ -123,6 +126,24 @@ class SettingsWindow(tk.Toplevel):
             anonymization_frame,
             text="Токенизация прямых идентификаторов",
             variable=self.tokenize_direct_identifiers,
+            command=self._on_tokenization_selected,
+            background=ANONYMIZATION_BACKGROUND,
+            foreground="#20384D",
+            activebackground=ANONYMIZATION_BACKGROUND,
+            activeforeground="#20384D",
+            selectcolor="#FFFFFF",
+            anchor="w",
+            justify="left",
+            padx=2,
+            pady=3,
+            font=("Segoe UI", 10),
+        ).pack(fill="x")
+
+        tk.Checkbutton(
+            anonymization_frame,
+            text="Удаление столбцов с прямыми идентификаторами",
+            variable=self.remove_direct_identifiers,
+            command=self._on_removal_selected,
             background=ANONYMIZATION_BACKGROUND,
             foreground="#20384D",
             activebackground=ANONYMIZATION_BACKGROUND,
@@ -138,9 +159,13 @@ class SettingsWindow(tk.Toplevel):
         tk.Label(
             anonymization_frame,
             text=(
-                "Заменяет значения столбцов, которым вручную назначена "
-                "роль «Прямой идентификатор». Если не выбрана ни одна "
-                "операция, кнопка «Анонимизировать» будет недоступна."
+                "Эти флажки определяют только состав суммарной анонимизации "
+                "по кнопке «Анонимизировать». После загрузки таблицы отдельные "
+                "операции доступны через меню «Операции» независимо от выбора здесь. "
+                "Токенизация и удаление — альтернативные способы обработки "
+                "одних и тех же столбцов; одновременно выбрать их нельзя. "
+                "Обе операции применяются только к столбцам с вручную "
+                "назначенной ролью «Прямой идентификатор»."
             ),
             background=ANONYMIZATION_BACKGROUND,
             foreground="#52677A",
@@ -159,6 +184,14 @@ class SettingsWindow(tk.Toplevel):
 
         self._toggle_threshold()
         self.grab_set()
+
+    def _on_tokenization_selected(self) -> None:
+        if self.tokenize_direct_identifiers.get():
+            self.remove_direct_identifiers.set(False)
+
+    def _on_removal_selected(self) -> None:
+        if self.remove_direct_identifiers.get():
+            self.tokenize_direct_identifiers.set(False)
 
     def _toggle_threshold(self) -> None:
         if self.detect_nominal.get():
@@ -192,6 +225,7 @@ class SettingsWindow(tk.Toplevel):
             ),
             anonymization=AnonymizationSettings(
                 tokenize_direct_identifiers=self.tokenize_direct_identifiers.get(),
+                remove_direct_identifiers=self.remove_direct_identifiers.get(),
             ),
         )
         try:

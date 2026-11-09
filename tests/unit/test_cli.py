@@ -77,6 +77,37 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result["customer_id"].iloc[0], result["customer_id"].iloc[2])
         self.assertIn("псевдонимизацией", output.getvalue())
 
+    def test_remove_direct_identifiers_requires_manual_role_and_writes_output(self):
+        error_output = StringIO()
+        with redirect_stderr(error_output):
+            code = cli.run_cli([
+                "remove-direct-identifiers",
+                str(self.csv_path),
+                str(self.root / "without_ids.csv"),
+            ])
+        self.assertEqual(code, 2)
+        self.assertIn("вручную не назначен", error_output.getvalue())
+
+        cli.run_cli([
+            "set-roles", str(self.csv_path),
+            "--column", "customer_id",
+            "--roles", "direct_identifier",
+        ])
+        output_path = self.root / "without_ids.csv"
+        output = StringIO()
+        with redirect_stdout(output):
+            code = cli.run_cli([
+                "remove-direct-identifiers",
+                str(self.csv_path),
+                str(output_path),
+            ])
+        self.assertEqual(code, 0)
+        result = pd.read_csv(output_path)
+        self.assertNotIn("customer_id", result.columns)
+        self.assertEqual(result["age"].tolist(), [20, 30, 20])
+        self.assertIn("Удалённые столбцы: customer_id", output.getvalue())
+        self.assertIn("customer_id", pd.read_csv(self.csv_path).columns)
+
     def test_anonymize_refuses_to_overwrite_input(self):
         output = StringIO()
         with redirect_stderr(output):

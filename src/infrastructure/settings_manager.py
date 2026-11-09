@@ -17,6 +17,7 @@ class DataTypeAnalysisSettings:
 @dataclass(frozen=True)
 class AnonymizationSettings:
     tokenize_direct_identifiers: bool = True
+    remove_direct_identifiers: bool = False
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,20 @@ def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
         raise ValueError(
             "Параметр tokenize_direct_identifiers должен быть логическим."
         )
+    remove_direct_identifiers = anonymization.get(
+        "remove_direct_identifiers",
+        False,
+    )
+    if not isinstance(remove_direct_identifiers, bool):
+        raise ValueError(
+            "Параметр remove_direct_identifiers должен быть логическим."
+        )
+    if tokenize_direct_identifiers and remove_direct_identifiers:
+        raise ValueError(
+            "Токенизация и удаление прямых идентификаторов являются "
+            "альтернативными операциями. Включите только одну из них "
+            "для суммарной анонимизации."
+        )
 
     return AppSettings(
         data_type_analysis=DataTypeAnalysisSettings(
@@ -85,11 +100,15 @@ def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
         ),
         anonymization=AnonymizationSettings(
             tokenize_direct_identifiers=tokenize_direct_identifiers,
+            remove_direct_identifiers=remove_direct_identifiers,
         ),
     )
 
 
-def save_settings(settings: AppSettings, path: str | Path = DEFAULT_SETTINGS_PATH) -> None:
+def save_settings(
+    settings: AppSettings,
+    path: str | Path = DEFAULT_SETTINGS_PATH,
+) -> None:
     settings_path = Path(path)
     threshold = settings.data_type_analysis.nominal_unique_threshold_percent
     if not isinstance(settings.data_type_analysis.detect_nominal_attributes, bool):
@@ -112,6 +131,19 @@ def save_settings(settings: AppSettings, path: str | Path = DEFAULT_SETTINGS_PAT
         raise ValueError(
             "Параметр tokenize_direct_identifiers должен быть логическим."
         )
+    if not isinstance(settings.anonymization.remove_direct_identifiers, bool):
+        raise ValueError(
+            "Параметр remove_direct_identifiers должен быть логическим."
+        )
+    if (
+        settings.anonymization.tokenize_direct_identifiers
+        and settings.anonymization.remove_direct_identifiers
+    ):
+        raise ValueError(
+            "Токенизация и удаление прямых идентификаторов являются "
+            "альтернативными операциями. Включите только одну из них "
+            "для суммарной анонимизации."
+        )
 
     payload = {
         "data_type_analysis": {
@@ -120,6 +152,7 @@ def save_settings(settings: AppSettings, path: str | Path = DEFAULT_SETTINGS_PAT
         },
         "anonymization": {
             "tokenize_direct_identifiers": settings.anonymization.tokenize_direct_identifiers,
+            "remove_direct_identifiers": settings.anonymization.remove_direct_identifiers,
         },
     }
     settings_path.parent.mkdir(parents=True, exist_ok=True)
