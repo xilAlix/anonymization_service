@@ -20,10 +20,14 @@ from data_processing.attribute_classifier import (
 )
 from data_processing.csv_handler import load_csv, save_csv
 from data_processing.schema_inspector import ColumnTypeResult, analyze_column_types
+from data_processing.quasi_identifier_analyzer import suggest_quasi_identifier_groups
 from infrastructure.attribute_profile_store import (
     DEFAULT_PROFILE_PATH,
     load_manual_role_overrides,
     save_manual_role_overrides,
+    load_quasi_identifier_groups,
+    save_quasi_identifier_groups,
+    new_manual_quasi_identifier_group,
 )
 from infrastructure.settings_manager import DEFAULT_SETTINGS_PATH, load_settings
 
@@ -75,7 +79,7 @@ def _format_analysis(
     return "\n".join(output)
 
 
-def _format_attribute_classification(csv_path: Path) -> str:
+def _format_attribute_classification(csv_path: Path, include_qi_groups: bool = False) -> str:
     dataframe = load_csv(csv_path)
     overrides = load_manual_role_overrides(csv_path, PROFILE_PATH)
     results = classify_attributes(dataframe, overrides)
@@ -106,6 +110,48 @@ def _format_attribute_classification(csv_path: Path) -> str:
         "Примечание: предложения эвристические и не являются гарантией "
         "обнаружения всех идентификаторов."
     )
+    if include_qi_groups:
+        manual_groups = load_quasi_identifier_groups(csv_path, PROFILE_PATH)
+        manual_only = [group for group in manual_groups if group.get("source") != "automatic"]
+        suggested_groups = suggest_quasi_identifier_groups(dataframe)
+        manual_ids = {group["id"] for group in manual_only}
+        merged_groups = manual_only + [
+            group for group in suggested_groups if group["id"] not in manual_ids
+        ]
+        save_quasi_identifier_groups(
+            csv_path,
+            merged_groups,
+            available_columns=list(dataframe.columns),
+            profile_path=PROFILE_PATH,
+        )
+        lines.extend(["", "Предлагаемые группы квази-идентификаторов:"])
+        lines.extend(_format_qi_groups(suggested_groups).splitlines())
+    return "\n".join(lines)
+
+
+def _format_qi_groups(groups: list[dict]) -> str:
+    if not groups:
+        return "  Кандидаты QI не обнаружены по текущему каталогу. Это не доказывает отсутствие QI."
+    lines: list[str] = []
+    for group in groups:
+        lines.append(
+            f"  {group['id']} | {group['name']} | уверенность: {group['confidence']}"
+        )
+        lines.append("    Атрибуты: " + ", ".join(group["attributes"]))
+        row_count = group.get("row_count")
+        row_count_label = str(row_count) if row_count is not None else "неизвестно"
+        lines.append(
+            "    Уникальность комбинаций внутри файла: "
+            f"{group.get('unique_tuple_ratio', 0.0):.1%} "
+            f"({group.get('unique_tuple_count', 0)} из {row_count_label} строк)"
+        )
+        for reason in group.get("reasons", []):
+            lines.append("    Основание: " + reason)
+        for attribute, evidence in group.get("attribute_evidence", {}).items():
+            lines.append(
+                f"    {attribute} ({evidence.get('confidence', 'не указана')}): "
+                + " ".join(evidence.get("reasons", []))
+            )
     return "\n".join(lines)
 
 
@@ -171,6 +217,51 @@ def build_parser() -> argparse.ArgumentParser:
         help="Разрешить перезапись существующего выходного файла.",
     )
 
+    qi_analyze_parser = subparsers.add_parser(
+        "analyze-quasi-identifier-groups",
+        help="Сформировать объяснимые предложения по нескольким группам QI.",
+    )
+    qi_analyze_parser.add_argument("csv_path", type=Path, help="Путь к CSV-файлу.")
+    qi_analyze_parser.add_argument(
+        "--save",
+        action="store_true",
+        help="Сохранить автоматические группы в профиле CSV, сохранив пользовательские группы.",
+    )
+
+    qi_list_parser = subparsers.add_parser(
+        "list-quasi-identifier-groups",
+        help="Показать сохранённые группы QI для CSV-файла.",
+    )
+    qi_list_parser.add_argument("csv_path", type=Path, help="Путь к CSV-файлу.")
+
+    qi_add_parser = subparsers.add_parser(
+        "add-quasi-identifier-group",
+        help="Создать пользовательскую группу QI.",
+    )
+    qi_add_parser.add_argument("csv_path", type=Path, help="Путь к CSV-файлу.")
+    qi_add_parser.add_argument("--name", required=True, help="Название группы.")
+    qi_add_parser.add_argument(
+        "--columns", nargs="+", required=True,
+        help="Названия столбцов, входящих в группу. Допускается пересечение групп.",
+    )
+
+    qi_edit_parser = subparsers.add_parser(
+        "edit-quasi-identifier-group",
+        help="Переименовать группу или изменить список её атрибутов.",
+    )
+    qi_edit_parser.add_argument("csv_path", type=Path, help="Путь к CSV-файлу.")
+    qi_edit_parser.add_argument("--group-id", required=True, help="ID из list-quasi-identifier-groups.")
+    qi_edit_parser.add_argument("--name", help="Новое название группы.")
+    qi_edit_parser.add_argument("--add-columns", nargs="*", default=[], help="Столбцы для добавления.")
+    qi_edit_parser.add_argument("--remove-columns", nargs="*", default=[], help="Столбцы для удаления.")
+
+    qi_delete_parser = subparsers.add_parser(
+        "delete-quasi-identifier-group",
+        help="Удалить группу QI из профиля CSV.",
+    )
+    qi_delete_parser.add_argument("csv_path", type=Path, help="Путь к CSV-файлу.")
+    qi_delete_parser.add_argument("--group-id", required=True, help="ID группы.")
+
     return parser
 
 
@@ -212,7 +303,11 @@ def run_cli(arguments: list[str]) -> int:
             return 0
 
         if args.command == "classify-attributes":
-            print(_format_attribute_classification(args.csv_path))
+            settings = load_settings(SETTINGS_PATH)
+            include_qi_groups = settings.data_type_analysis.enable_multiple_quasi_identifier_groups
+            print(_format_attribute_classification(args.csv_path, include_qi_groups))
+            if include_qi_groups:
+                print("\nАвтоматические группы сохранены в профиле набора данных.")
             return 0
 
         if args.command == "set-roles":
@@ -227,6 +322,97 @@ def run_cli(arguments: list[str]) -> int:
             assigned = role_labels(overrides[args.column])
             print(f"Ручные роли столбца «{args.column}» сохранены: {assigned}.")
             print(f"Профиль: {PROFILE_PATH}")
+            return 0
+
+        if args.command == "analyze-quasi-identifier-groups":
+            dataframe = load_csv(args.csv_path)
+            groups = suggest_quasi_identifier_groups(dataframe)
+            print(f"Файл: {args.csv_path}")
+            print(f"Размер: {len(dataframe)} строк × {len(dataframe.columns)} столбцов")
+            print(_format_qi_groups(groups))
+            if args.save:
+                existing = load_quasi_identifier_groups(args.csv_path, PROFILE_PATH)
+                manual_groups = [group for group in existing if group.get("source") != "automatic"]
+                manual_ids = {group["id"] for group in manual_groups}
+                fresh_groups = [group for group in groups if group["id"] not in manual_ids]
+                save_quasi_identifier_groups(
+                    args.csv_path,
+                    manual_groups + fresh_groups,
+                    available_columns=list(dataframe.columns),
+                    profile_path=PROFILE_PATH,
+                )
+                print(f"\nАвтоматические предложения сохранены. Профиль: {PROFILE_PATH}")
+            print(
+                "\nВажно: группы являются гипотезами о возможных источниках фоновой "
+                "информации. Они не доказывают фактическую доступность внешних данных."
+            )
+            return 0
+
+        if args.command == "list-quasi-identifier-groups":
+            groups = load_quasi_identifier_groups(args.csv_path, PROFILE_PATH)
+            if not groups:
+                print("Для этого CSV группы QI ещё не сохранены.")
+                return 0
+            for group in groups:
+                print(
+                    f"{group['id']} | {group['name']} | {group.get('source', 'manual')} | "
+                    f"атрибуты: {', '.join(group['attributes'])}"
+                )
+            return 0
+
+        if args.command == "add-quasi-identifier-group":
+            dataframe = load_csv(args.csv_path)
+            groups = load_quasi_identifier_groups(args.csv_path, PROFILE_PATH)
+            new_group = new_manual_quasi_identifier_group(args.name, args.columns)
+            groups.append(new_group)
+            save_quasi_identifier_groups(
+                args.csv_path,
+                groups,
+                available_columns=list(dataframe.columns),
+                profile_path=PROFILE_PATH,
+            )
+            print(f"Создана группа «{new_group['name']}» с ID {new_group['id']}.")
+            return 0
+
+        if args.command == "edit-quasi-identifier-group":
+            dataframe = load_csv(args.csv_path)
+            groups = load_quasi_identifier_groups(args.csv_path, PROFILE_PATH)
+            group = next((item for item in groups if item["id"] == args.group_id), None)
+            if group is None:
+                raise ValueError(f"Группа с ID «{args.group_id}» не найдена.")
+            if args.name is not None:
+                group["name"] = args.name.strip()
+            attributes = list(group["attributes"])
+            for column in args.remove_columns:
+                if column in attributes:
+                    attributes.remove(column)
+            for column in args.add_columns:
+                if column not in attributes:
+                    attributes.append(column)
+            group["attributes"] = attributes
+            group["source"] = "manual"
+            group["confidence"] = "ручная"
+            group["reasons"] = ["Группа изменена пользователем через CLI."]
+            save_quasi_identifier_groups(
+                args.csv_path,
+                groups,
+                available_columns=list(dataframe.columns),
+                profile_path=PROFILE_PATH,
+            )
+            print(f"Группа «{group['name']}» обновлена.")
+            return 0
+
+        if args.command == "delete-quasi-identifier-group":
+            groups = load_quasi_identifier_groups(args.csv_path, PROFILE_PATH)
+            retained = [group for group in groups if group["id"] != args.group_id]
+            if len(retained) == len(groups):
+                raise ValueError(f"Группа с ID «{args.group_id}» не найдена.")
+            save_quasi_identifier_groups(
+                args.csv_path,
+                retained,
+                profile_path=PROFILE_PATH,
+            )
+            print(f"Группа «{args.group_id}» удалена.")
             return 0
 
         if args.command in {"anonymize", "remove-direct-identifiers"}:

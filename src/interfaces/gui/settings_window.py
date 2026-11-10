@@ -27,7 +27,7 @@ class SettingsWindow(tk.Toplevel):
         self.on_save = on_save
         self.title("Настройки")
         self.resizable(False, False)
-        self.geometry("620x370")
+        self.geometry("620x430")
         self.transient(parent)
         self.configure(background=APP_BACKGROUND)
 
@@ -49,6 +49,9 @@ class SettingsWindow(tk.Toplevel):
         )
         self.threshold = tk.StringVar(
             value=f"{settings.data_type_analysis.nominal_unique_threshold_percent:g}"
+        )
+        self.enable_multiple_qi_groups = tk.BooleanVar(
+            value=settings.data_type_analysis.enable_multiple_quasi_identifier_groups
         )
         self.tokenize_direct_identifiers = tk.BooleanVar(
             value=settings.anonymization.tokenize_direct_identifiers
@@ -79,6 +82,21 @@ class SettingsWindow(tk.Toplevel):
             nominal_check,
             "Эвристически отмечает столбцы по доле уникальных непустых значений. "
             "Это не семантическая классификация атрибутов.",
+        )
+
+        qi_groups_check = ttk.Checkbutton(
+            container,
+            text="Автоматически формировать несколько групп квази-идентификаторов",
+            variable=self.enable_multiple_qi_groups,
+            style="Settings.TCheckbutton",
+        )
+        qi_groups_check.pack(anchor="w", pady=(9, 0))
+        ToolTip(
+            qi_groups_check,
+            "При классификации таблицы формирует несколько предполагаемых профилей "
+            "внешней фоновой информации, например демографический или географический. "
+            "Названия и состав групп можно редактировать. Это эвристические предложения, "
+            "а не доказательство доступности внешних источников.",
         )
 
         self.threshold_frame = ttk.Frame(container, style="Settings.TFrame")
@@ -231,6 +249,7 @@ class SettingsWindow(tk.Toplevel):
             data_type_analysis=DataTypeAnalysisSettings(
                 detect_nominal_attributes=self.detect_nominal.get(),
                 nominal_unique_threshold_percent=threshold,
+                enable_multiple_quasi_identifier_groups=self.enable_multiple_qi_groups.get(),
             ),
             anonymization=AnonymizationSettings(
                 tokenize_direct_identifiers=self.tokenize_direct_identifiers.get(),

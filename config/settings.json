@@ -1,10 +1,11 @@
 {
   "data_type_analysis": {
-    "detect_nominal_attributes": false,
-    "nominal_unique_threshold_percent": 10.0
+    "detect_nominal_attributes": true,
+    "nominal_unique_threshold_percent": 10.0,
+    "enable_multiple_quasi_identifier_groups": true
   },
   "anonymization": {
-    "tokenize_direct_identifiers": false,
-    "remove_direct_identifiers": true
+    "tokenize_direct_identifiers": true,
+    "remove_direct_identifiers": false
   }
 }

@@ -12,6 +12,7 @@ DEFAULT_SETTINGS_PATH = PROJECT_ROOT / "config" / "settings.json"
 class DataTypeAnalysisSettings:
     detect_nominal_attributes: bool = False
     nominal_unique_threshold_percent: float = 10.0
+    enable_multiple_quasi_identifier_groups: bool = False
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,9 @@ def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
 
     enabled = analysis.get("detect_nominal_attributes", False)
     raw_threshold = analysis.get("nominal_unique_threshold_percent", 10.0)
+    enable_multiple_qi_groups = analysis.get("enable_multiple_quasi_identifier_groups", False)
+    if not isinstance(enable_multiple_qi_groups, bool):
+        raise ValueError("Параметр enable_multiple_quasi_identifier_groups должен быть логическим.")
     if not isinstance(enabled, bool):
         raise ValueError(
             "Параметр detect_nominal_attributes должен быть логическим."
@@ -97,6 +101,7 @@ def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
         data_type_analysis=DataTypeAnalysisSettings(
             detect_nominal_attributes=enabled,
             nominal_unique_threshold_percent=threshold,
+            enable_multiple_quasi_identifier_groups=enable_multiple_qi_groups,
         ),
         anonymization=AnonymizationSettings(
             tokenize_direct_identifiers=tokenize_direct_identifiers,
@@ -115,6 +120,8 @@ def save_settings(
         raise ValueError(
             "Параметр detect_nominal_attributes должен быть логическим."
         )
+    if not isinstance(settings.data_type_analysis.enable_multiple_quasi_identifier_groups, bool):
+        raise ValueError("Параметр enable_multiple_quasi_identifier_groups должен быть логическим.")
     if isinstance(threshold, bool):
         raise ValueError("Порог уникальных значений должен быть числом от 0 до 100.")
     try:
@@ -149,6 +156,7 @@ def save_settings(
         "data_type_analysis": {
             "detect_nominal_attributes": settings.data_type_analysis.detect_nominal_attributes,
             "nominal_unique_threshold_percent": threshold,
+            "enable_multiple_quasi_identifier_groups": settings.data_type_analysis.enable_multiple_quasi_identifier_groups,
         },
         "anonymization": {
             "tokenize_direct_identifiers": settings.anonymization.tokenize_direct_identifiers,

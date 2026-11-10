@@ -11,13 +11,20 @@ from application.anonymization_workflow import (
     apply_anonymization_operations,
 )
 from data_processing.csv_handler import load_csv, save_csv
-from infrastructure.attribute_profile_store import load_manual_role_overrides, save_manual_role_overrides
+from data_processing.quasi_identifier_analyzer import suggest_quasi_identifier_groups
+from infrastructure.attribute_profile_store import (
+    load_manual_role_overrides,
+    save_manual_role_overrides,
+    load_quasi_identifier_groups,
+    save_quasi_identifier_groups,
+)
 from data_processing.schema_inspector import analyze_column_types
 from infrastructure.settings_manager import AppSettings, load_settings
 from interfaces.gui.attribute_classification_window import AttributeClassificationWindow
 from interfaces.gui.column_types_window import ColumnTypesWindow
 from interfaces.gui.settings_window import SettingsWindow
 from interfaces.gui.tooltip import ToolTip
+from interfaces.gui.quasi_identifier_groups_window import QuasiIdentifierGroupsWindow
 
 
 APP_BACKGROUND = "#F4F5F7"
@@ -62,6 +69,7 @@ class TableViewer(tk.Tk):
         self.settings_window: SettingsWindow | None = None
         self.column_types_window: ColumnTypesWindow | None = None
         self.attribute_classification_window: AttributeClassificationWindow | None = None
+        self.quasi_identifier_groups_window: QuasiIdentifierGroupsWindow | None = None
 
         self.title("Сервис анонимизации")
         self.geometry("1120x700")
@@ -95,19 +103,25 @@ class TableViewer(tk.Tk):
             state="disabled",
         )
         self.classification_menu_index = 4
+        operations_menu.add_command(
+            label="Группы квази-идентификаторов...",
+            command=self.show_quasi_identifier_groups,
+            state="disabled",
+        )
+        self.quasi_identifier_groups_menu_index = 5
         operations_menu.add_separator()
         operations_menu.add_command(
             label="Токенизировать прямые идентификаторы...",
             command=self.tokenize_direct_identifiers,
             state="disabled",
         )
-        self.tokenization_menu_index = 6
+        self.tokenization_menu_index = 7
         operations_menu.add_command(
             label="Удалить столбцы с прямыми идентификаторами...",
             command=self.remove_direct_identifiers,
             state="disabled",
         )
-        self.removal_menu_index = 7
+        self.removal_menu_index = 8
         menu_bar.add_cascade(label="Операции", menu=operations_menu)
         self.config(menu=menu_bar)
 
@@ -210,6 +224,11 @@ class TableViewer(tk.Tk):
             and self.attribute_classification_window.winfo_exists()
         ):
             self.attribute_classification_window.destroy()
+        if (
+            self.quasi_identifier_groups_window is not None
+            and self.quasi_identifier_groups_window.winfo_exists()
+        ):
+            self.quasi_identifier_groups_window.destroy()
 
         self.current_dataframe = dataframe
         self.current_file_path = source_path.resolve()
@@ -337,6 +356,12 @@ class TableViewer(tk.Tk):
         self.operations_menu.entryconfig(
             self.removal_menu_index,
             state=individual_state,
+        )
+        qi_groups_enabled = self.settings.data_type_analysis.enable_multiple_quasi_identifier_groups
+        qi_groups_state = "normal" if table_loaded and qi_groups_enabled else "disabled"
+        self.operations_menu.entryconfig(
+            self.quasi_identifier_groups_menu_index,
+            state=qi_groups_state,
         )
         self.anonymize_button.configure(state=aggregate_state)
 
@@ -471,6 +496,8 @@ class TableViewer(tk.Tk):
 
         try:
             manual_overrides = load_manual_role_overrides(self.current_file_path)
+            if self.settings.data_type_analysis.enable_multiple_quasi_identifier_groups:
+                self._refresh_automatic_quasi_identifier_groups()
         except (OSError, ValueError) as error:
             messagebox.showerror("Ошибка профиля атрибутов", str(error))
             return
@@ -489,4 +516,65 @@ class TableViewer(tk.Tk):
             self.current_dataframe,
             manual_overrides,
             persist_overrides,
+        )
+
+    def _refresh_automatic_quasi_identifier_groups(self) -> list[dict]:
+        if self.current_dataframe is None or self.current_file_path is None:
+            raise ValueError("Сначала загрузите CSV-файл.")
+        existing = load_quasi_identifier_groups(self.current_file_path)
+        manual_groups = [group for group in existing if group.get("source") != "automatic"]
+        suggested = suggest_quasi_identifier_groups(self.current_dataframe)
+        manual_ids = {group["id"] for group in manual_groups}
+        merged = manual_groups + [
+            group for group in suggested if group["id"] not in manual_ids
+        ]
+        save_quasi_identifier_groups(
+            self.current_file_path,
+            merged,
+            available_columns=list(self.current_dataframe.columns),
+        )
+        return suggested
+
+    def show_quasi_identifier_groups(self) -> None:
+        if self.current_dataframe is None or self.current_file_path is None:
+            messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.")
+            return
+        if not self.settings.data_type_analysis.enable_multiple_quasi_identifier_groups:
+            messagebox.showinfo(
+                "Режим выключен",
+                "Включи режим множественных групп QI в настройках анализа.",
+                parent=self,
+            )
+            return
+        if (
+            self.quasi_identifier_groups_window is not None
+            and self.quasi_identifier_groups_window.winfo_exists()
+        ):
+            self.quasi_identifier_groups_window.lift()
+            return
+
+        try:
+            groups = load_quasi_identifier_groups(self.current_file_path)
+            if not groups:
+                self._refresh_automatic_quasi_identifier_groups()
+                groups = load_quasi_identifier_groups(self.current_file_path)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Ошибка анализа QI", str(error), parent=self)
+            return
+
+        def persist_groups(updated_groups: list[dict]) -> bool:
+            save_quasi_identifier_groups(
+                self.current_file_path,
+                updated_groups,
+                available_columns=list(self.current_dataframe.columns),
+            )
+            self.status.set("Группы квази-идентификаторов сохранены.")
+            return True
+
+        self.quasi_identifier_groups_window = QuasiIdentifierGroupsWindow(
+            self,
+            [str(column) for column in self.current_dataframe.columns],
+            groups,
+            persist_groups,
+            self._refresh_automatic_quasi_identifier_groups,
         )
