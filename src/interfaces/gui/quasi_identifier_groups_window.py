@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 from infrastructure.attribute_profile_store import new_manual_quasi_identifier_group
 from interfaces.gui.tooltip import ToolTip
+from interfaces.gui.quasi_identifier_advanced_window import QuasiIdentifierAdvancedWindow
 
 
 APP_BACKGROUND = "#F4F5F7"
@@ -17,6 +18,7 @@ class QuasiIdentifierGroupsWindow(tk.Toplevel):
         groups: list[dict],
         on_save: Callable[[list[dict]], bool],
         on_refresh_automatic: Callable[[], list[dict]],
+        csv_path=None,
     ):
         super().__init__(parent)
         self.title("Группы квази-идентификаторов")
@@ -26,10 +28,14 @@ class QuasiIdentifierGroupsWindow(tk.Toplevel):
         self.configure(background=APP_BACKGROUND)
 
         self.columns = list(columns)
+        self.csv_path = csv_path
+        self.advanced_window = None
         self.groups = [dict(group) for group in groups]
         self._on_save = on_save
         self._on_refresh_automatic = on_refresh_automatic
         self._selected_group_id: str | None = None
+        self.active_var = tk.BooleanVar(value=False)
+        self.k_override_var = tk.StringVar(value="")
 
         style = ttk.Style(self)
         style.configure("QIGroup.TFrame", background=APP_BACKGROUND)
@@ -147,8 +153,40 @@ class QuasiIdentifierGroupsWindow(tk.Toplevel):
             "а не вероятность реальной повторной идентификации.",
         )
 
+        profile_options = ttk.LabelFrame(
+            content,
+            text="Использование в k-анонимизации",
+            padding=8,
+        )
+        profile_options.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        active_check = ttk.Checkbutton(
+            profile_options,
+            text="Подтверждена и активна для k-анонимизации",
+            variable=self.active_var,
+            command=self._update_group_options,
+        )
+        active_check.pack(side="left")
+        ToolTip(active_check, "Автоматические предложения по умолчанию неактивны. Включай только проверенные QI-профили.")
+        ttk.Label(profile_options, text="k для этой группы:").pack(side="left", padx=(18, 6))
+        self.k_override_input = ttk.Entry(
+            profile_options,
+            textvariable=self.k_override_var,
+            width=7,
+        )
+        self.k_override_input.pack(side="left")
+        self.k_override_input.bind("<Return>", self._update_group_options)
+        self.k_override_input.bind("<FocusOut>", self._update_group_options)
+        ToolTip(self.k_override_input, "Оставь пустым, чтобы использовать общее k из настроек.")
+
         actions = ttk.Frame(content, style="QIGroup.TFrame")
-        actions.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        actions.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        advanced_button = ttk.Button(
+            actions,
+            text="Иерархии и связи...",
+            command=self._open_advanced_settings,
+        )
+        advanced_button.pack(side="left")
+        ToolTip(advanced_button, "Настроить обобщение категорий и совместную обработку связанных признаков.")
         save_button = ttk.Button(actions, text="Сохранить", command=self._save)
         save_button.pack(side="right")
         ToolTip(save_button, "Сохранить все созданные и изменённые группы в профиль CSV.")
@@ -163,9 +201,10 @@ class QuasiIdentifierGroupsWindow(tk.Toplevel):
         self.group_list.delete(0, "end")
         for group in self.groups:
             source_label = "авто" if group.get("source") == "automatic" else "вручную"
+            active_label = "активна" if group.get("active", group.get("source") != "automatic") else "не активна"
             self.group_list.insert(
                 "end",
-                f"{group['name']} [{len(group.get('attributes', []))}] · {source_label}",
+                f"{group['name']} [{len(group.get('attributes', []))}] · {source_label} · {active_label}",
             )
 
     def _current_group(self) -> dict | None:
@@ -182,11 +221,15 @@ class QuasiIdentifierGroupsWindow(tk.Toplevel):
         self.attribute_list.selection_clear(0, "end")
         if group is None:
             self._selected_group_id = None
+            self.active_var.set(False)
+            self.k_override_var.set("")
             self.group_details.set("Группа не выбрана.")
             self.details_tooltip.set_text("Выбери группу, чтобы посмотреть её состав и основания автоматического предложения.")
             return
 
         self._selected_group_id = group["id"]
+        self.active_var.set(bool(group.get("active", group.get("source") != "automatic")))
+        self.k_override_var.set(str(group.get("k_override") or ""))
         selected = set(group.get("attributes", []))
         for index, column in enumerate(self.columns):
             if column in selected:
@@ -203,6 +246,33 @@ class QuasiIdentifierGroupsWindow(tk.Toplevel):
         if reasons:
             tooltip_parts.append("Основания: " + " ".join(reasons))
         self.details_tooltip.set_text("\n\n".join(part for part in tooltip_parts if part))
+
+    def _update_group_options(self, _event=None) -> None:
+        group = self._current_group()
+        if group is None:
+            return
+        value = self.k_override_var.get().strip()
+        if value:
+            try:
+                k_override = int(value)
+            except ValueError:
+                self.group_details.set("k должен быть целым числом не меньше 2.")
+                return
+            if k_override < 2:
+                self.group_details.set("k должен быть целым числом не меньше 2.")
+                return
+            group["k_override"] = k_override
+        else:
+            group["k_override"] = None
+        was_active = bool(group.get("active", False))
+        group["active"] = self.active_var.get()
+        if group["active"] and not was_active and group.get("source") == "automatic":
+            group["source"] = "manual"
+            group["reasons"] = list(group.get("reasons", [])) + ["Автоматическое предложение подтверждено пользователем."]
+        self._render_groups()
+        selection = self.groups.index(group)
+        self.group_list.selection_set(selection)
+        self.group_list.activate(selection)
 
     def _create_group(self) -> None:
         name = simpledialog.askstring(
@@ -283,6 +353,8 @@ class QuasiIdentifierGroupsWindow(tk.Toplevel):
         group["source"] = "manual"
         group["confidence"] = "ручная"
         group["reasons"] = ["Состав группы подтверждён пользователем."]
+        group["active"] = self.active_var.get()
+        self._update_group_options()
         self._render_groups()
         self.group_list.selection_set(self.groups.index(group))
         self._group_selected()
@@ -309,7 +381,21 @@ class QuasiIdentifierGroupsWindow(tk.Toplevel):
             "Автоматические предложения обновлены. Пользовательские группы сохранены."
         )
 
+    def _open_advanced_settings(self) -> None:
+        if self.csv_path is None:
+            messagebox.showerror("Нет пути к CSV", "Не удалось определить текущий набор данных.", parent=self)
+            return
+        if self.advanced_window is not None and self.advanced_window.winfo_exists():
+            self.advanced_window.lift()
+            return
+        self.advanced_window = QuasiIdentifierAdvancedWindow(
+            self,
+            self.csv_path,
+            self.columns,
+        )
+
     def _save(self) -> None:
+        self._update_group_options()
         try:
             if self._on_save(self.groups):
                 messagebox.showinfo("Группы сохранены", "Группы квази-идентификаторов сохранены.", parent=self)

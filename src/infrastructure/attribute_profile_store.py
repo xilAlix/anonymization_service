@@ -88,7 +88,9 @@ def save_manual_role_overrides(
         dataset["manual_overrides"] = manual_overrides
     else:
         dataset.pop("manual_overrides", None)
-    if not dataset.get("manual_overrides") and not dataset.get("quasi_identifier_groups"):
+    if not any(dataset.get(key) for key in (
+        "manual_overrides", "quasi_identifier_groups", "generalization_hierarchies", "correlation_blocks"
+    )):
         registry["datasets"].pop(fingerprint, None)
     _write_registry(path, registry)
 
@@ -131,6 +133,14 @@ def _validate_groups(groups: list[dict], available_columns: set[str] | None = No
                 )
         seen_ids.add(group_id)
         seen_names.add(normalized_name)
+        k_override = group.get("k_override")
+        if k_override is not None and (
+            isinstance(k_override, bool) or not isinstance(k_override, int) or k_override < 2
+        ):
+            raise ValueError(f"Для группы «{name}» k_override должен быть целым числом не меньше 2.")
+        active = group.get("active", group.get("source", "manual") != "automatic")
+        if not isinstance(active, bool):
+            raise ValueError(f"Для группы «{name}» параметр active должен быть логическим.")
         validated.append({
             "id": group_id,
             "name": name.strip(),
@@ -144,6 +154,8 @@ def _validate_groups(groups: list[dict], available_columns: set[str] | None = No
             "unique_tuple_count": group.get("unique_tuple_count"),
             "unique_tuple_ratio": group.get("unique_tuple_ratio"),
             "row_count": group.get("row_count"),
+            "active": active,
+            "k_override": k_override,
         })
     return validated
 
@@ -176,7 +188,9 @@ def save_quasi_identifier_groups(
         dataset["quasi_identifier_groups"] = validated
     else:
         dataset.pop("quasi_identifier_groups", None)
-    if not dataset.get("manual_overrides") and not dataset.get("quasi_identifier_groups"):
+    if not any(dataset.get(key) for key in (
+        "manual_overrides", "quasi_identifier_groups", "generalization_hierarchies", "correlation_blocks"
+    )):
         registry["datasets"].pop(fingerprint, None)
     _write_registry(path, registry)
 
@@ -194,4 +208,138 @@ def new_manual_quasi_identifier_group(name: str, attributes: list[str]) -> dict:
         "reasons": ["Состав группы задан пользователем."],
         "unique_tuple_count": None,
         "unique_tuple_ratio": None,
+        "active": True,
+        "k_override": None,
     }
+
+
+
+def load_quasi_identifier_hierarchies(
+    csv_path: str | Path,
+    profile_path: str | Path = DEFAULT_PROFILE_PATH,
+) -> dict[str, list[dict]]:
+    registry = _read_registry(Path(profile_path))
+    dataset = _dataset_profile(registry, csv_path)
+    hierarchies = dataset.get("generalization_hierarchies", {})
+    if not isinstance(hierarchies, dict):
+        raise ValueError("Иерархии обобщения QI имеют некорректную структуру.")
+    validated: dict[str, list[dict]] = {}
+    for column, levels in hierarchies.items():
+        if not isinstance(column, str) or not isinstance(levels, list):
+            raise ValueError("Некорректная запись иерархии обобщения.")
+        if any(not isinstance(level, dict) for level in levels):
+            raise ValueError(f"Уровни иерархии столбца «{column}» должны быть JSON-объектами.")
+        validated[column] = levels
+    return validated
+
+
+def save_quasi_identifier_hierarchy(
+    csv_path: str | Path,
+    column: str,
+    levels: list[dict],
+    available_columns: set[str] | list[str] | tuple[str, ...],
+    profile_path: str | Path = DEFAULT_PROFILE_PATH,
+) -> None:
+    if column not in set(available_columns):
+        raise ValueError(f"Столбец «{column}» отсутствует в CSV.")
+    if not isinstance(levels, list) or not levels:
+        raise ValueError("Нужно задать хотя бы один уровень иерархии.")
+    for index, level in enumerate(levels, start=1):
+        if not isinstance(level, dict) or not level:
+            raise ValueError(f"Уровень {index} должен быть непустым JSON-объектом.")
+        if any(not isinstance(key, str) or not isinstance(value, str) or not value.strip() for key, value in level.items()):
+            raise ValueError(f"Уровень {index} содержит некорректные значения.")
+    path = Path(profile_path)
+    registry = _read_registry(path)
+    fingerprint = dataset_profile_key(csv_path)
+    dataset = registry["datasets"].setdefault(fingerprint, {"source_name": Path(csv_path).name})
+    hierarchies = dataset.setdefault("generalization_hierarchies", {})
+    hierarchies[column] = levels
+    _write_registry(path, registry)
+
+
+def load_quasi_identifier_correlation_blocks(
+    csv_path: str | Path,
+    profile_path: str | Path = DEFAULT_PROFILE_PATH,
+) -> list[dict]:
+    registry = _read_registry(Path(profile_path))
+    blocks = _dataset_profile(registry, csv_path).get("correlation_blocks", [])
+    if not isinstance(blocks, list):
+        raise ValueError("Блоки сохранения корреляций имеют некорректную структуру.")
+    validated = []
+    seen_ids: set[str] = set()
+    for block in blocks:
+        if not isinstance(block, dict):
+            raise ValueError("Некорректная запись блока корреляций.")
+        block_id = block.get("id")
+        name = block.get("name")
+        attributes = block.get("attributes")
+        if not isinstance(block_id, str) or not block_id or block_id in seen_ids:
+            raise ValueError("Некорректный или повторяющийся ID блока корреляций.")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("У блока корреляций должно быть название.")
+        if not isinstance(attributes, list) or len(attributes) < 2 or len(attributes) != len(set(attributes)):
+            raise ValueError(f"Блок «{name}» должен содержать минимум два различных столбца.")
+        seen_ids.add(block_id)
+        validated.append({"id": block_id, "name": name.strip(), "attributes": list(attributes)})
+    return validated
+
+
+def save_quasi_identifier_correlation_blocks(
+    csv_path: str | Path,
+    blocks: list[dict],
+    available_columns: set[str] | list[str] | tuple[str, ...],
+    profile_path: str | Path = DEFAULT_PROFILE_PATH,
+) -> None:
+    available = set(available_columns)
+    ids: set[str] = set()
+    names: set[str] = set()
+    validated = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            raise ValueError("Некорректная запись блока корреляций.")
+        block_id = block.get("id")
+        name = str(block.get("name", "")).strip()
+        attributes = block.get("attributes")
+        if not isinstance(block_id, str) or not block_id or block_id in ids:
+            raise ValueError("ID блока корреляций должен быть уникальным.")
+        if not name or name.casefold() in names:
+            raise ValueError("Название блока корреляций должно быть уникальным и непустым.")
+        if not isinstance(attributes, list) or len(attributes) < 2 or len(attributes) != len(set(attributes)):
+            raise ValueError(f"Блок «{name}» должен содержать минимум два различных столбца.")
+        missing = [column for column in attributes if column not in available]
+        if missing:
+            raise ValueError(f"В блоке «{name}» отсутствуют столбцы: {', '.join(missing)}")
+        ids.add(block_id)
+        names.add(name.casefold())
+        validated.append({"id": block_id, "name": name, "attributes": list(attributes)})
+    path = Path(profile_path)
+    registry = _read_registry(path)
+    fingerprint = dataset_profile_key(csv_path)
+    dataset = registry["datasets"].setdefault(fingerprint, {"source_name": Path(csv_path).name})
+    if validated:
+        dataset["correlation_blocks"] = validated
+    else:
+        dataset.pop("correlation_blocks", None)
+    _write_registry(path, registry)
+
+
+def delete_quasi_identifier_hierarchy(
+    csv_path: str | Path,
+    column: str,
+    profile_path: str | Path = DEFAULT_PROFILE_PATH,
+) -> None:
+    path = Path(profile_path)
+    registry = _read_registry(path)
+    fingerprint = dataset_profile_key(csv_path)
+    dataset = registry["datasets"].get(fingerprint)
+    if not dataset or column not in dataset.get("generalization_hierarchies", {}):
+        raise ValueError(f"Для столбца «{column}» иерархия не найдена.")
+    dataset["generalization_hierarchies"].pop(column, None)
+    if not dataset["generalization_hierarchies"]:
+        dataset.pop("generalization_hierarchies", None)
+    if not any(dataset.get(key) for key in (
+        "manual_overrides", "quasi_identifier_groups", "generalization_hierarchies", "correlation_blocks"
+    )):
+        registry["datasets"].pop(fingerprint, None)
+    _write_registry(path, registry)

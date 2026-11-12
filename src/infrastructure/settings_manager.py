@@ -22,9 +22,17 @@ class AnonymizationSettings:
 
 
 @dataclass(frozen=True)
+class KAnonymizationSettings:
+    default_k: int = 5
+    max_row_suppression_percent: float = 5.0
+    numeric_representative: str = "mean"
+
+
+@dataclass(frozen=True)
 class AppSettings:
     data_type_analysis: DataTypeAnalysisSettings = DataTypeAnalysisSettings()
     anonymization: AnonymizationSettings = AnonymizationSettings()
+    k_anonymization: KAnonymizationSettings = KAnonymizationSettings()
 
 
 def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
@@ -97,6 +105,25 @@ def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
             "для суммарной анонимизации."
         )
 
+    k_anonymization = raw.get("k_anonymization", {})
+    if not isinstance(k_anonymization, dict):
+        raise ValueError("Раздел k_anonymization должен быть JSON-объектом.")
+    raw_default_k = k_anonymization.get("default_k", 5)
+    if isinstance(raw_default_k, bool) or not isinstance(raw_default_k, int) or raw_default_k < 2:
+        raise ValueError("Значение k по умолчанию должно быть целым числом не меньше 2.")
+    raw_suppression = k_anonymization.get("max_row_suppression_percent", 5.0)
+    if isinstance(raw_suppression, bool):
+        raise ValueError("Ограничение подавления строк должно находиться от 0 до 5%.")
+    try:
+        max_row_suppression = float(raw_suppression)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Ограничение подавления строк должно находиться от 0 до 5%.") from error
+    if not math.isfinite(max_row_suppression) or not 0 <= max_row_suppression <= 5:
+        raise ValueError("Ограничение подавления строк должно находиться от 0 до 5%.")
+    representative = k_anonymization.get("numeric_representative", "mean")
+    if representative not in {"mean", "median", "medoid"}:
+        raise ValueError("Способ замены числовых значений должен быть mean, median или medoid.")
+
     return AppSettings(
         data_type_analysis=DataTypeAnalysisSettings(
             detect_nominal_attributes=enabled,
@@ -106,6 +133,11 @@ def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
         anonymization=AnonymizationSettings(
             tokenize_direct_identifiers=tokenize_direct_identifiers,
             remove_direct_identifiers=remove_direct_identifiers,
+        ),
+        k_anonymization=KAnonymizationSettings(
+            default_k=raw_default_k,
+            max_row_suppression_percent=max_row_suppression,
+            numeric_representative=representative,
         ),
     )
 
@@ -152,6 +184,20 @@ def save_settings(
             "для суммарной анонимизации."
         )
 
+    k_settings = settings.k_anonymization
+    if isinstance(k_settings.default_k, bool) or not isinstance(k_settings.default_k, int) or k_settings.default_k < 2:
+        raise ValueError("Значение k по умолчанию должно быть целым числом не меньше 2.")
+    if isinstance(k_settings.max_row_suppression_percent, bool):
+        raise ValueError("Ограничение подавления строк должно находиться от 0 до 5%.")
+    try:
+        max_row_suppression = float(k_settings.max_row_suppression_percent)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Ограничение подавления строк должно находиться от 0 до 5%.") from error
+    if not math.isfinite(max_row_suppression) or not 0 <= max_row_suppression <= 5:
+        raise ValueError("Ограничение подавления строк должно находиться от 0 до 5%.")
+    if k_settings.numeric_representative not in {"mean", "median", "medoid"}:
+        raise ValueError("Способ замены числовых значений должен быть mean, median или medoid.")
+
     payload = {
         "data_type_analysis": {
             "detect_nominal_attributes": settings.data_type_analysis.detect_nominal_attributes,
@@ -161,6 +207,11 @@ def save_settings(
         "anonymization": {
             "tokenize_direct_identifiers": settings.anonymization.tokenize_direct_identifiers,
             "remove_direct_identifiers": settings.anonymization.remove_direct_identifiers,
+        },
+        "k_anonymization": {
+            "default_k": k_settings.default_k,
+            "max_row_suppression_percent": max_row_suppression,
+            "numeric_representative": k_settings.numeric_representative,
         },
     }
     settings_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,10 +1,14 @@
 from pathlib import Path
 import sys
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 import pandas as pd
 
+from application.k_anonymization_workflow import (
+    execute_k_anonymization,
+    save_k_anonymity_report,
+)
 from application.anonymization_workflow import (
     REMOVE_DIRECT_IDENTIFIERS,
     TOKENIZE_DIRECT_IDENTIFIERS,
@@ -122,6 +126,13 @@ class TableViewer(tk.Tk):
             state="disabled",
         )
         self.removal_menu_index = 8
+        operations_menu.add_separator()
+        operations_menu.add_command(
+            label="Выполнить k-анонимизацию...",
+            command=self.run_k_anonymization,
+            state="disabled",
+        )
+        self.k_anonymization_menu_index = 10
         menu_bar.add_cascade(label="Операции", menu=operations_menu)
         self.config(menu=menu_bar)
 
@@ -174,11 +185,14 @@ class TableViewer(tk.Tk):
             self.anonymize_button,
             "Запускает операции, выбранные в настройках суммарной анонимизации.",
         )
-        ttk.Button(
+        self.k_anonymize_button = ttk.Button(
             toolbar,
-            text="Оценить результат",
+            text="k-анонимизировать",
+            command=self.run_k_anonymization,
             state="disabled",
-        ).pack(side="left")
+        )
+        self.k_anonymize_button.pack(side="left", padx=(0, 7))
+        ToolTip(self.k_anonymize_button, "Формирует k-анонимное представление по подтверждённым QI-профилям.")
 
         table_frame = ttk.Frame(content, style="App.TFrame")
         table_frame.grid(row=1, column=0, sticky="nsew")
@@ -363,7 +377,80 @@ class TableViewer(tk.Tk):
             self.quasi_identifier_groups_menu_index,
             state=qi_groups_state,
         )
+        active_qi_profiles = False
+        if table_loaded:
+            try:
+                active_qi_profiles = any(
+                    group.get("active", group.get("source") != "automatic")
+                    for group in load_quasi_identifier_groups(self.current_file_path)
+                )
+            except (OSError, ValueError):
+                active_qi_profiles = False
+        k_state = "normal" if table_loaded and active_qi_profiles else "disabled"
+        self.operations_menu.entryconfig(self.k_anonymization_menu_index, state=k_state)
+        self.k_anonymize_button.configure(state=k_state)
         self.anonymize_button.configure(state=aggregate_state)
+
+    def run_k_anonymization(self) -> None:
+        if self.current_dataframe is None or self.current_file_path is None:
+            messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.", parent=self)
+            return
+        default_k = self.settings.k_anonymization.default_k
+        k_value = simpledialog.askinteger(
+            "Параметры k-анонимизации",
+            "Общее значение k. Для отдельных QI-профилей может быть задано собственное значение:",
+            initialvalue=default_k,
+            minvalue=2,
+            parent=self,
+        )
+        if k_value is None:
+            return
+        output_path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Сохранить k-анонимную таблицу",
+            defaultextension=".csv",
+            initialfile=f"{self.current_file_path.stem}_k_anonymized.csv",
+            filetypes=(("CSV-файлы", "*.csv"),),
+        )
+        if not output_path:
+            return
+        destination = Path(output_path).resolve()
+        if destination == self.current_file_path.resolve():
+            messagebox.showerror("Недопустимый путь", "Нельзя сохранять результат поверх исходного CSV.", parent=self)
+            return
+        report_path = destination.with_name(destination.stem + "_k_report.json")
+        if destination.exists() or report_path.exists():
+            if not messagebox.askyesno(
+                "Перезапись файлов",
+                f"Файл результата или отчёта уже существует. Перезаписать?\n\n{destination}\n{report_path}",
+                parent=self,
+            ):
+                return
+        try:
+            result, report = execute_k_anonymization(
+                self.current_dataframe,
+                self.current_file_path,
+                default_k=k_value,
+                representative=self.settings.k_anonymization.numeric_representative,
+            )
+            save_csv(result, destination)
+            save_k_anonymity_report(report, report_path)
+        except (OSError, ValueError, RuntimeError) as error:
+            messagebox.showerror("k-анонимизация не выполнена", str(error), parent=self)
+            return
+
+        self.status.set(f"k-анонимизация завершена. Результат: {destination.name}")
+        profile_lines = [
+            f"{item['group_name']}: k={item['required_k']}, минимум в классе={item['minimum_equivalence_class_size']}"
+            for item in report["profiles"]
+        ]
+        messagebox.showinfo(
+            "k-анонимизация завершена",
+            "Все активные QI-профили прошли проверку k-анонимности.\n\n"
+            + "\n".join(profile_lines)
+            + f"\n\nРезультат: {destination}\nОтчёт: {report_path}",
+            parent=self,
+        )
 
     def anonymize_selected_operations(self) -> None:
         selected_operations = []
@@ -569,6 +656,7 @@ class TableViewer(tk.Tk):
                 available_columns=list(self.current_dataframe.columns),
             )
             self.status.set("Группы квази-идентификаторов сохранены.")
+            self._update_anonymization_controls()
             return True
 
         self.quasi_identifier_groups_window = QuasiIdentifierGroupsWindow(
@@ -577,4 +665,5 @@ class TableViewer(tk.Tk):
             groups,
             persist_groups,
             self._refresh_automatic_quasi_identifier_groups,
+            self.current_file_path,
         )

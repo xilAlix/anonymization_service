@@ -6,6 +6,7 @@ from infrastructure.settings_manager import (
     AnonymizationSettings,
     AppSettings,
     DataTypeAnalysisSettings,
+    KAnonymizationSettings,
     save_settings,
 )
 from interfaces.gui.tooltip import ToolTip
@@ -27,7 +28,7 @@ class SettingsWindow(tk.Toplevel):
         self.on_save = on_save
         self.title("Настройки")
         self.resizable(False, False)
-        self.geometry("620x430")
+        self.geometry("620x490")
         self.transient(parent)
         self.configure(background=APP_BACKGROUND)
 
@@ -58,6 +59,10 @@ class SettingsWindow(tk.Toplevel):
         )
         self.remove_direct_identifiers = tk.BooleanVar(
             value=settings.anonymization.remove_direct_identifiers
+        )
+        self.default_k = tk.StringVar(value=str(settings.k_anonymization.default_k))
+        self.numeric_representative = tk.StringVar(
+            value=settings.k_anonymization.numeric_representative
         )
 
         container = ttk.Frame(self, padding=18, style="Settings.TFrame")
@@ -195,6 +200,54 @@ class SettingsWindow(tk.Toplevel):
             "идентификатора. Если столбец также аналитический, удаление "
             "будет отменено.",
         )
+        k_frame = tk.Frame(
+            container,
+            background="#F0F3F7",
+            highlightthickness=1,
+            highlightbackground="#C7D0DA",
+            bd=0,
+            padx=12,
+            pady=8,
+        )
+        k_frame.pack(fill="x", anchor="w", pady=(12, 0))
+        tk.Label(
+            k_frame,
+            text="k-анонимизация",
+            background="#F0F3F7",
+            foreground="#20384D",
+            font=("Segoe UI", 10, "bold"),
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        tk.Label(
+            k_frame,
+            text="Значение k по умолчанию:",
+            background="#F0F3F7",
+            foreground="#20384D",
+        ).grid(row=1, column=0, sticky="w")
+        self.default_k_input = ttk.Spinbox(
+            k_frame,
+            from_=2,
+            to=1000000,
+            textvariable=self.default_k,
+            width=8,
+        )
+        self.default_k_input.grid(row=1, column=1, sticky="w", padx=(12, 0))
+        ToolTip(self.default_k_input, "Минимальный размер каждой группы по умолчанию. Отдельный QI-профиль может переопределить это значение.")
+        tk.Label(
+            k_frame,
+            text="Представитель числовой группы:",
+            background="#F0F3F7",
+            foreground="#20384D",
+        ).grid(row=2, column=0, sticky="w", pady=(7, 0))
+        self.representative_select = ttk.Combobox(
+            k_frame,
+            state="readonly",
+            values=("mean", "median", "medoid"),
+            textvariable=self.numeric_representative,
+            width=10,
+        )
+        self.representative_select.grid(row=2, column=1, sticky="w", padx=(12, 0), pady=(7, 0))
+        ToolTip(self.representative_select, "Среднее, медиана или существующая запись-медоид как замена числовых значений кластера.")
+
         buttons = ttk.Frame(container, style="Settings.TFrame")
         buttons.pack(side="bottom", fill="x", pady=(18, 0))
         ttk.Button(buttons, text="Сохранить", command=self._save).pack(side="right")
@@ -245,6 +298,15 @@ class SettingsWindow(tk.Toplevel):
             )
             return
 
+        try:
+            default_k = int(self.default_k.get())
+        except ValueError:
+            messagebox.showerror("Некорректное значение", "Значение k должно быть целым числом не меньше 2.", parent=self)
+            return
+        if default_k < 2:
+            messagebox.showerror("Некорректное значение", "Значение k должно быть не меньше 2.", parent=self)
+            return
+
         settings = AppSettings(
             data_type_analysis=DataTypeAnalysisSettings(
                 detect_nominal_attributes=self.detect_nominal.get(),
@@ -254,6 +316,11 @@ class SettingsWindow(tk.Toplevel):
             anonymization=AnonymizationSettings(
                 tokenize_direct_identifiers=self.tokenize_direct_identifiers.get(),
                 remove_direct_identifiers=self.remove_direct_identifiers.get(),
+            ),
+            k_anonymization=KAnonymizationSettings(
+                default_k=default_k,
+                max_row_suppression_percent=5.0,
+                numeric_representative=self.numeric_representative.get(),
             ),
         )
         try:

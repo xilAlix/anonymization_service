@@ -7,5 +7,10 @@
   "anonymization": {
     "tokenize_direct_identifiers": true,
     "remove_direct_identifiers": false
+  },
+  "k_anonymization": {
+    "default_k": 2,
+    "max_row_suppression_percent": 5.0,
+    "numeric_representative": "medoid"
   }
 }
