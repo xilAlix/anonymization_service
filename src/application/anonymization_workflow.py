@@ -1,4 +1,6 @@
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -11,10 +13,20 @@ from infrastructure.attribute_profile_store import (
 
 TOKENIZE_DIRECT_IDENTIFIERS = "tokenize_direct_identifiers"
 REMOVE_DIRECT_IDENTIFIERS = "remove_direct_identifiers"
+K_ANONYMITY = "k_anonymity"
 SUPPORTED_OPERATIONS = {
     TOKENIZE_DIRECT_IDENTIFIERS,
     REMOVE_DIRECT_IDENTIFIERS,
+    K_ANONYMITY,
 }
+
+
+@dataclass(frozen=True)
+class AnonymizationExecutionResult:
+    dataframe: pd.DataFrame
+    affected_columns: list[str]
+    operations: list[str]
+    k_report: dict[str, Any] | None = None
 
 
 def get_manual_direct_identifier_columns(
@@ -86,7 +98,9 @@ def apply_anonymization_operations(
     source_csv_path: str | Path,
     operations: list[str],
     profile_path: str | Path = DEFAULT_PROFILE_PATH,
-) -> tuple[pd.DataFrame, list[str], str]:
+    default_k: int = 5,
+    representative: str = "mean",
+) -> AnonymizationExecutionResult:
     if not operations:
         raise ValueError("Не выбрана ни одна операция анонимизации.")
 
@@ -101,7 +115,10 @@ def apply_anonymization_operations(
     if len(operations) != len(set(operations)):
         raise ValueError("Список операций анонимизации содержит повторы.")
 
-    if len(operations) > 1:
+    if (
+        TOKENIZE_DIRECT_IDENTIFIERS in operations
+        and REMOVE_DIRECT_IDENTIFIERS in operations
+    ):
         raise ValueError(
             "Токенизация и удаление являются альтернативными способами обработки "
             "одних и тех же прямых идентификаторов. Для суммарной анонимизации "
@@ -109,18 +126,54 @@ def apply_anonymization_operations(
             "можно через меню «Операции»."
         )
 
-    operation = operations[0]
-    if operation == TOKENIZE_DIRECT_IDENTIFIERS:
-        result, columns = anonymize_manual_direct_identifiers(
-            dataframe,
-            source_csv_path,
-            profile_path,
-        )
-    else:
-        result, columns = remove_manual_direct_identifiers(
-            dataframe,
-            source_csv_path,
-            profile_path,
-        )
+    result = dataframe.copy(deep=True)
+    affected_columns: list[str] = []
+    direct_identifier_columns: list[str] = []
+    k_report = None
+    applied_operations: list[str] = []
 
-    return result, columns, operation
+    # k-анонимизация выполняется до обработки прямых идентификаторов,
+    # чтобы QI-профили могли использовать исходные значения своих столбцов.
+    if K_ANONYMITY in operations:
+        from application.k_anonymization_workflow import execute_k_anonymization
+
+        result, k_report = execute_k_anonymization(
+            result,
+            source_csv_path,
+            default_k=default_k,
+            representative=representative,
+            profile_path=profile_path,
+        )
+        for component in k_report.get("components", []):
+            affected_columns.extend(component.get("attributes", []))
+        applied_operations.append(K_ANONYMITY)
+
+    if TOKENIZE_DIRECT_IDENTIFIERS in operations:
+        result, columns = anonymize_manual_direct_identifiers(
+            result,
+            source_csv_path,
+            profile_path,
+        )
+        direct_identifier_columns = list(columns)
+        affected_columns.extend(columns)
+        applied_operations.append(TOKENIZE_DIRECT_IDENTIFIERS)
+    elif REMOVE_DIRECT_IDENTIFIERS in operations:
+        result, columns = remove_manual_direct_identifiers(
+            result,
+            source_csv_path,
+            profile_path,
+        )
+        direct_identifier_columns = list(columns)
+        affected_columns.extend(columns)
+        applied_operations.append(REMOVE_DIRECT_IDENTIFIERS)
+
+    if k_report is not None:
+        k_report["combined_operations"] = applied_operations
+        k_report["direct_identifier_columns"] = direct_identifier_columns
+
+    return AnonymizationExecutionResult(
+        dataframe=result,
+        affected_columns=list(dict.fromkeys(affected_columns)),
+        operations=applied_operations,
+        k_report=k_report,
+    )

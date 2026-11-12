@@ -12,6 +12,10 @@ if str(SRC_DIRECTORY) not in sys.path:
     sys.path.insert(0, str(SRC_DIRECTORY))
 
 from application.anonymization_workflow import (
+    K_ANONYMITY,
+    REMOVE_DIRECT_IDENTIFIERS,
+    TOKENIZE_DIRECT_IDENTIFIERS,
+    apply_anonymization_operations,
     anonymize_manual_direct_identifiers,
     remove_manual_direct_identifiers,
 )
@@ -327,6 +331,29 @@ def build_parser() -> argparse.ArgumentParser:
     k_evaluate_parser.add_argument("csv_path", type=Path)
     k_evaluate_parser.add_argument("--k", type=int, help="Общее значение k. По умолчанию берётся из настроек.")
 
+    selected_anonymize_parser = subparsers.add_parser(
+        "anonymize-selected",
+        help="Выполнить операции, выбранные в настройках суммарной анонимизации.",
+    )
+    selected_anonymize_parser.add_argument("input_csv", type=Path)
+    selected_anonymize_parser.add_argument("output_csv", type=Path)
+    selected_anonymize_parser.add_argument("--k", type=int, help="Переопределить общее значение k.")
+    selected_anonymize_parser.add_argument(
+        "--representative",
+        choices=("mean", "median", "medoid"),
+        help="Переопределить способ замены числовых значений.",
+    )
+    selected_anonymize_parser.add_argument(
+        "--report-json",
+        type=Path,
+        help="Путь к подробному JSON-отчёту k-анонимизации.",
+    )
+    selected_anonymize_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Разрешить перезапись выходного CSV и отчёта.",
+    )
+
     return parser
 
 
@@ -601,6 +628,80 @@ def run_cli(arguments: list[str]) -> int:
             print(f"Результат: {output_path}")
             print(f"Подробный отчёт: {report_path}")
             print("Важно: k-анонимность не гарантирует l-разнообразие, t-близость или DP.")
+            return 0
+
+        if args.command == "anonymize-selected":
+            input_path = args.input_csv.resolve()
+            output_path = args.output_csv.resolve()
+            if input_path == output_path:
+                raise ValueError("Выходной файл не должен совпадать с исходным CSV.")
+            if output_path.exists() and not args.overwrite:
+                raise FileExistsError(
+                    f"Выходной файл уже существует: {output_path}. Используй --overwrite."
+                )
+
+            settings = load_settings(SETTINGS_PATH)
+            selected_operations = []
+            if settings.anonymization.tokenize_direct_identifiers:
+                selected_operations.append(TOKENIZE_DIRECT_IDENTIFIERS)
+            if settings.anonymization.remove_direct_identifiers:
+                selected_operations.append(REMOVE_DIRECT_IDENTIFIERS)
+            if settings.anonymization.enable_k_anonymity:
+                selected_operations.append(K_ANONYMITY)
+
+            dataframe = load_csv(input_path)
+            execution = apply_anonymization_operations(
+                dataframe,
+                input_path,
+                selected_operations,
+                profile_path=PROFILE_PATH,
+                default_k=(
+                    args.k if args.k is not None
+                    else settings.k_anonymization.default_k
+                ),
+                representative=(
+                    args.representative
+                    or settings.k_anonymization.numeric_representative
+                ),
+            )
+
+            report_path = None
+            if execution.k_report is not None:
+                report_path = args.report_json or output_path.with_name(
+                    output_path.stem + "_k_report.json"
+                )
+                report_path = report_path.resolve()
+                if report_path == input_path:
+                    raise ValueError("Файл отчёта не должен совпадать с исходным CSV.")
+                if report_path == output_path:
+                    raise ValueError("Файл отчёта не должен совпадать с выходным CSV.")
+                if report_path.exists() and not args.overwrite:
+                    raise FileExistsError(
+                        f"Файл отчёта уже существует: {report_path}. Используй --overwrite."
+                    )
+                execution.k_report["combined_operations"] = execution.operations
+
+            save_csv(execution.dataframe, output_path)
+            if execution.k_report is not None and report_path is not None:
+                save_k_anonymity_report(execution.k_report, report_path)
+
+            operation_labels = {
+                TOKENIZE_DIRECT_IDENTIFIERS: "токенизация прямых идентификаторов",
+                REMOVE_DIRECT_IDENTIFIERS: "удаление прямых идентификаторов",
+                K_ANONYMITY: "k-анонимизация",
+            }
+            print("Выполненные операции: " + ", ".join(
+                operation_labels[item] for item in execution.operations
+            ))
+            print("Обработанные столбцы: " + (", ".join(execution.affected_columns) or "нет"))
+            print(f"Результат сохранён: {output_path}")
+            if report_path is not None:
+                print(f"Подробный отчёт: {report_path}")
+            if TOKENIZE_DIRECT_IDENTIFIERS in execution.operations:
+                print(
+                    "Важно: токенизация является псевдонимизацией и сама по себе "
+                    "не гарантирует анонимность набора данных."
+                )
             return 0
 
         if args.command in {"anonymize", "remove-direct-identifiers"}:

@@ -28,7 +28,7 @@ class SettingsWindow(tk.Toplevel):
         self.on_save = on_save
         self.title("Настройки")
         self.resizable(False, False)
-        self.geometry("620x490")
+        self.geometry("620x520")
         self.transient(parent)
         self.configure(background=APP_BACKGROUND)
 
@@ -59,6 +59,9 @@ class SettingsWindow(tk.Toplevel):
         )
         self.remove_direct_identifiers = tk.BooleanVar(
             value=settings.anonymization.remove_direct_identifiers
+        )
+        self.enable_k_anonymity = tk.BooleanVar(
+            value=settings.anonymization.enable_k_anonymity
         )
         self.default_k = tk.StringVar(value=str(settings.k_anonymization.default_k))
         self.numeric_representative = tk.StringVar(
@@ -200,6 +203,27 @@ class SettingsWindow(tk.Toplevel):
             "идентификатора. Если столбец также аналитический, удаление "
             "будет отменено.",
         )
+        k_operation_check = tk.Checkbutton(
+            anonymization_frame,
+            text="k-анонимизация по активным QI-профилям",
+            variable=self.enable_k_anonymity,
+            background=ANONYMIZATION_BACKGROUND,
+            foreground="#20384D",
+            activebackground=ANONYMIZATION_BACKGROUND,
+            activeforeground="#20384D",
+            selectcolor="#FFFFFF",
+            anchor="w",
+            justify="left",
+            padx=2,
+            pady=3,
+            font=("Segoe UI", 10),
+        )
+        k_operation_check.pack(fill="x")
+        ToolTip(
+            k_operation_check,
+            "Включает k-анонимизацию в общий запуск кнопкой «Анонимизировать». "
+            "Для отдельного запуска используйте меню «Операции».",
+        )
         k_frame = tk.Frame(
             container,
             background="#F0F3F7",
@@ -316,6 +340,7 @@ class SettingsWindow(tk.Toplevel):
             anonymization=AnonymizationSettings(
                 tokenize_direct_identifiers=self.tokenize_direct_identifiers.get(),
                 remove_direct_identifiers=self.remove_direct_identifiers.get(),
+                enable_k_anonymity=self.enable_k_anonymity.get(),
             ),
             k_anonymization=KAnonymizationSettings(
                 default_k=default_k,

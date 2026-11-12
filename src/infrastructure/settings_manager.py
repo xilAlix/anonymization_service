@@ -19,6 +19,7 @@ class DataTypeAnalysisSettings:
 class AnonymizationSettings:
     tokenize_direct_identifiers: bool = True
     remove_direct_identifiers: bool = False
+    enable_k_anonymity: bool = False
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,9 @@ def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
         raise ValueError(
             "Параметр remove_direct_identifiers должен быть логическим."
         )
+    enable_k_anonymity = anonymization.get("enable_k_anonymity", False)
+    if not isinstance(enable_k_anonymity, bool):
+        raise ValueError("Параметр enable_k_anonymity должен быть логическим.")
     if tokenize_direct_identifiers and remove_direct_identifiers:
         raise ValueError(
             "Токенизация и удаление прямых идентификаторов являются "
@@ -133,6 +137,7 @@ def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
         anonymization=AnonymizationSettings(
             tokenize_direct_identifiers=tokenize_direct_identifiers,
             remove_direct_identifiers=remove_direct_identifiers,
+            enable_k_anonymity=enable_k_anonymity,
         ),
         k_anonymization=KAnonymizationSettings(
             default_k=raw_default_k,
@@ -174,6 +179,8 @@ def save_settings(
         raise ValueError(
             "Параметр remove_direct_identifiers должен быть логическим."
         )
+    if not isinstance(settings.anonymization.enable_k_anonymity, bool):
+        raise ValueError("Параметр enable_k_anonymity должен быть логическим.")
     if (
         settings.anonymization.tokenize_direct_identifiers
         and settings.anonymization.remove_direct_identifiers
@@ -207,6 +214,7 @@ def save_settings(
         "anonymization": {
             "tokenize_direct_identifiers": settings.anonymization.tokenize_direct_identifiers,
             "remove_direct_identifiers": settings.anonymization.remove_direct_identifiers,
+            "enable_k_anonymity": settings.anonymization.enable_k_anonymity,
         },
         "k_anonymization": {
             "default_k": k_settings.default_k,

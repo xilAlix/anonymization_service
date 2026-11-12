@@ -10,6 +10,7 @@ from application.k_anonymization_workflow import (
     save_k_anonymity_report,
 )
 from application.anonymization_workflow import (
+    K_ANONYMITY,
     REMOVE_DIRECT_IDENTIFIERS,
     TOKENIZE_DIRECT_IDENTIFIERS,
     apply_anonymization_operations,
@@ -185,15 +186,6 @@ class TableViewer(tk.Tk):
             self.anonymize_button,
             "Запускает операции, выбранные в настройках суммарной анонимизации.",
         )
-        self.k_anonymize_button = ttk.Button(
-            toolbar,
-            text="k-анонимизировать",
-            command=self.run_k_anonymization,
-            state="disabled",
-        )
-        self.k_anonymize_button.pack(side="left", padx=(0, 7))
-        ToolTip(self.k_anonymize_button, "Формирует k-анонимное представление по подтверждённым QI-профилям.")
-
         table_frame = ttk.Frame(content, style="App.TFrame")
         table_frame.grid(row=1, column=0, sticky="nsew")
         table_frame.columnconfigure(0, weight=1)
@@ -357,6 +349,7 @@ class TableViewer(tk.Tk):
         aggregate_selected = (
             self.settings.anonymization.tokenize_direct_identifiers
             or self.settings.anonymization.remove_direct_identifiers
+            or self.settings.anonymization.enable_k_anonymity
         )
 
         individual_state = "normal" if table_loaded else "disabled"
@@ -388,7 +381,6 @@ class TableViewer(tk.Tk):
                 active_qi_profiles = False
         k_state = "normal" if table_loaded and active_qi_profiles else "disabled"
         self.operations_menu.entryconfig(self.k_anonymization_menu_index, state=k_state)
-        self.k_anonymize_button.configure(state=k_state)
         self.anonymize_button.configure(state=aggregate_state)
 
     def run_k_anonymization(self) -> None:
@@ -458,6 +450,8 @@ class TableViewer(tk.Tk):
             selected_operations.append(TOKENIZE_DIRECT_IDENTIFIERS)
         if self.settings.anonymization.remove_direct_identifiers:
             selected_operations.append(REMOVE_DIRECT_IDENTIFIERS)
+        if self.settings.anonymization.enable_k_anonymity:
+            selected_operations.append(K_ANONYMITY)
 
         if not selected_operations:
             messagebox.showwarning(
@@ -472,6 +466,7 @@ class TableViewer(tk.Tk):
             selected_operations,
             output_suffix="_anonymized",
             title="Сохранить результат суммарной анонимизации",
+            aggregate=True,
         )
 
     def tokenize_direct_identifiers(self) -> None:
@@ -493,18 +488,21 @@ class TableViewer(tk.Tk):
         operations: list[str],
         output_suffix: str,
         title: str,
+        aggregate: bool = False,
     ) -> None:
         if self.current_dataframe is None or self.current_file_path is None:
             messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.")
             return
 
         try:
-            result, affected_columns, operation = apply_anonymization_operations(
+            execution = apply_anonymization_operations(
                 self.current_dataframe,
                 self.current_file_path,
                 operations,
+                default_k=self.settings.k_anonymization.default_k,
+                representative=self.settings.k_anonymization.numeric_representative,
             )
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, RuntimeError) as error:
             messagebox.showerror(
                 "Невозможно выполнить операцию",
                 str(error),
@@ -530,42 +528,60 @@ class TableViewer(tk.Tk):
                 parent=self,
             )
             return
-        if destination.exists() and not messagebox.askyesno(
-            "Перезапись файла",
-            f"Файл уже существует:\n{destination}\nПерезаписать его?",
+        report_path = (
+            destination.with_name(destination.stem + "_k_report.json")
+            if execution.k_report is not None
+            else None
+        )
+        existing_paths = [destination]
+        if report_path is not None:
+            existing_paths.append(report_path)
+        existing_paths = [path for path in existing_paths if path.exists()]
+        if existing_paths and not messagebox.askyesno(
+            "Перезапись файлов",
+            "Следующие файлы уже существуют:\n"
+            + "\n".join(str(path) for path in existing_paths)
+            + "\nПерезаписать их?",
             parent=self,
         ):
             return
 
         try:
-            save_csv(result, destination)
+            save_csv(execution.dataframe, destination)
+            if report_path is not None and execution.k_report is not None:
+                save_k_anonymity_report(execution.k_report, report_path)
         except (OSError, ValueError) as error:
             messagebox.showerror("Ошибка сохранения", str(error), parent=self)
             return
 
-        if operation == TOKENIZE_DIRECT_IDENTIFIERS:
-            operation_title = "Токенизированы столбцы"
-            success_text = (
-                "Значения прямых идентификаторов заменены токенами. "
+        operation_labels = {
+            TOKENIZE_DIRECT_IDENTIFIERS: "токенизация прямых идентификаторов",
+            REMOVE_DIRECT_IDENTIFIERS: "удаление прямых идентификаторов",
+            K_ANONYMITY: "k-анонимизация",
+        }
+        operations_text = ", ".join(
+            operation_labels[item] for item in execution.operations
+        )
+        affected_text = ", ".join(execution.affected_columns) or "нет"
+        details = [
+            f"Выполненные операции: {operations_text}",
+            f"Обработанные столбцы: {affected_text}",
+            f"Результат сохранён: {destination}",
+        ]
+        if execution.k_report is not None and report_path is not None:
+            details.append(f"Отчёт k-анонимизации: {report_path}")
+        if TOKENIZE_DIRECT_IDENTIFIERS in execution.operations:
+            details.append(
                 "Токенизация является псевдонимизацией и сама по себе "
                 "не гарантирует анонимность данных."
             )
-        else:
-            operation_title = "Удалены столбцы"
-            success_text = (
-                "Столбцы с вручную назначенной ролью «Прямой идентификатор» "
-                "удалены из результирующей таблицы. Исходный CSV не изменён."
-            )
-
-        columns_text = ", ".join(affected_columns)
-        self.status.set(
-            f"Операция завершена. {operation_title.lower()}: {columns_text}. "
-            f"Результат: {destination.name}"
+        completion_title = (
+            "Суммарная анонимизация завершена" if aggregate else "Операция завершена"
         )
+        self.status.set(f"{completion_title}: {operations_text}. Результат: {destination.name}")
         messagebox.showinfo(
-            "Операция завершена",
-            f"{success_text}\n\n{operation_title}: {columns_text}\n"
-            f"Результат сохранён: {destination}",
+            completion_title,
+            "\n\n".join(details),
             parent=self,
         )
 
