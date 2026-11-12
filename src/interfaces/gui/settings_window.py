@@ -27,8 +27,9 @@ class SettingsWindow(tk.Toplevel):
         super().__init__(parent)
         self.on_save = on_save
         self.title("Настройки")
-        self.resizable(False, False)
-        self.geometry("620x520")
+        self.geometry("780x640")
+        self.minsize(700, 560)
+        self.resizable(True, True)
         self.transient(parent)
         self.configure(background=APP_BACKGROUND)
 
@@ -68,15 +69,43 @@ class SettingsWindow(tk.Toplevel):
             value=settings.k_anonymization.numeric_representative
         )
 
-        container = ttk.Frame(self, padding=18, style="Settings.TFrame")
-        container.pack(fill="both", expand=True)
+        shell = ttk.Frame(self, style="Settings.TFrame")
+        shell.pack(fill="both", expand=True)
+        shell.rowconfigure(0, weight=1)
+        shell.columnconfigure(0, weight=1)
+
+        canvas = tk.Canvas(
+            shell,
+            background=APP_BACKGROUND,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        scrollbar = ttk.Scrollbar(shell, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        container = ttk.Frame(canvas, padding=22, style="Settings.TFrame")
+        content_window = canvas.create_window(
+            (0, 0),
+            window=container,
+            anchor="nw",
+        )
+        container.bind(
+            "<Configure>",
+            lambda _event: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda event: canvas.itemconfigure(content_window, width=event.width),
+        )
 
         ttk.Label(
             container,
             text="Анализ типов данных",
-            font=("Segoe UI", 12, "bold"),
+            font=("Segoe UI", 13, "bold"),
             style="Settings.TLabel",
-        ).pack(anchor="w", pady=(0, 12))
+        ).pack(anchor="w", pady=(0, 14))
 
         nominal_check = ttk.Checkbutton(
             container,
@@ -98,19 +127,20 @@ class SettingsWindow(tk.Toplevel):
             variable=self.enable_multiple_qi_groups,
             style="Settings.TCheckbutton",
         )
-        qi_groups_check.pack(anchor="w", pady=(9, 0))
+        qi_groups_check.pack(anchor="w", pady=(10, 0))
         ToolTip(
             qi_groups_check,
-            "При классификации таблицы формирует несколько предполагаемых профилей "
-            "внешней фоновой информации, например демографический или географический. "
-            "Названия и состав групп можно редактировать. Это эвристические предложения, "
-            "а не доказательство доступности внешних источников.",
+            "При классификации таблицы формирует предполагаемые профили внешней "
+            "фоновой информации, например демографический или географический. "
+            "Названия и состав групп можно редактировать. Это эвристические "
+            "предложения, а не доказательство доступности внешних источников.",
         )
 
         self.threshold_frame = ttk.Frame(container, style="Settings.TFrame")
+        self.threshold_frame.pack(fill="x", anchor="w", pady=(12, 0))
         threshold_label = ttk.Label(
             self.threshold_frame,
-            text="Порог уникальных непустых значений, %:",
+            text="Порог уникальности для номинальных атрибутов, %:",
             style="Settings.TLabel",
         )
         threshold_label.pack(side="left")
@@ -120,12 +150,14 @@ class SettingsWindow(tk.Toplevel):
             to=100,
             increment=0.5,
             textvariable=self.threshold,
-            width=8,
+            width=14,
+            justify="right",
         )
-        self.threshold_input.pack(side="left", padx=(10, 0))
+        self.threshold_input.pack(side="left", padx=(14, 0))
         threshold_help = (
             "Максимальная доля уникальных непустых значений, при которой "
-            "столбец считается номинальным."
+            "столбец считается номинальным. Поле остаётся видимым, но становится "
+            "неактивным, если автоматическое определение номинальности выключено."
         )
         ToolTip(threshold_label, threshold_help)
         ToolTip(self.threshold_input, threshold_help)
@@ -137,110 +169,80 @@ class SettingsWindow(tk.Toplevel):
             highlightbackground=ANONYMIZATION_BORDER,
             highlightcolor=ANONYMIZATION_BORDER,
             bd=0,
-            padx=12,
-            pady=10,
+            padx=14,
+            pady=12,
         )
-        anonymization_frame.pack(fill="x", anchor="w", pady=(18, 0))
+        anonymization_frame.pack(fill="x", anchor="w", pady=(22, 0))
 
         anonymization_title = tk.Label(
             anonymization_frame,
             text="Операции суммарной анонимизации",
             background=ANONYMIZATION_BACKGROUND,
             foreground="#20384D",
-            font=("Segoe UI", 11, "bold"),
+            font=("Segoe UI", 12, "bold"),
             anchor="w",
         )
-        anonymization_title.pack(fill="x", pady=(0, 6))
+        anonymization_title.pack(fill="x", pady=(0, 8))
         ToolTip(
             anonymization_title,
             "Отмеченные операции запускаются кнопкой «Анонимизировать» "
             "на главном окне. Отдельные операции доступны в меню «Операции».",
         )
 
-        tokenize_check = tk.Checkbutton(
+        tokenize_check = self._create_anonymization_check(
             anonymization_frame,
-            text="Токенизация прямых идентификаторов",
-            variable=self.tokenize_direct_identifiers,
-            command=self._on_tokenization_selected,
-            background=ANONYMIZATION_BACKGROUND,
-            foreground="#20384D",
-            activebackground=ANONYMIZATION_BACKGROUND,
-            activeforeground="#20384D",
-            selectcolor="#FFFFFF",
-            anchor="w",
-            justify="left",
-            padx=2,
-            pady=3,
-            font=("Segoe UI", 10),
+            "Токенизация прямых идентификаторов",
+            self.tokenize_direct_identifiers,
+            self._on_tokenization_selected,
         )
-        tokenize_check.pack(fill="x")
         ToolTip(
             tokenize_check,
             "Заменяет значения вручную назначенных прямых идентификаторов "
             "токенами. Повторяющиеся значения в одном столбце получают один токен.",
         )
 
-        remove_check = tk.Checkbutton(
+        remove_check = self._create_anonymization_check(
             anonymization_frame,
-            text="Удаление столбцов с прямыми идентификаторами",
-            variable=self.remove_direct_identifiers,
-            command=self._on_removal_selected,
-            background=ANONYMIZATION_BACKGROUND,
-            foreground="#20384D",
-            activebackground=ANONYMIZATION_BACKGROUND,
-            activeforeground="#20384D",
-            selectcolor="#FFFFFF",
-            anchor="w",
-            justify="left",
-            padx=2,
-            pady=3,
-            font=("Segoe UI", 10),
+            "Удаление столбцов с прямыми идентификаторами",
+            self.remove_direct_identifiers,
+            self._on_removal_selected,
         )
-        remove_check.pack(fill="x")
         ToolTip(
             remove_check,
             "Удаляет целые столбцы с вручную назначенной ролью прямого "
             "идентификатора. Если столбец также аналитический, удаление "
             "будет отменено.",
         )
-        k_operation_check = tk.Checkbutton(
+
+        k_operation_check = self._create_anonymization_check(
             anonymization_frame,
-            text="k-анонимизация по активным QI-профилям",
-            variable=self.enable_k_anonymity,
-            background=ANONYMIZATION_BACKGROUND,
-            foreground="#20384D",
-            activebackground=ANONYMIZATION_BACKGROUND,
-            activeforeground="#20384D",
-            selectcolor="#FFFFFF",
-            anchor="w",
-            justify="left",
-            padx=2,
-            pady=3,
-            font=("Segoe UI", 10),
+            "k-анонимизация по активным QI-профилям",
+            self.enable_k_anonymity,
         )
-        k_operation_check.pack(fill="x")
         ToolTip(
             k_operation_check,
             "Включает k-анонимизацию в общий запуск кнопкой «Анонимизировать». "
             "Для отдельного запуска используйте меню «Операции».",
         )
+
         k_frame = tk.Frame(
             container,
             background="#F0F3F7",
             highlightthickness=1,
             highlightbackground="#C7D0DA",
             bd=0,
-            padx=12,
-            pady=8,
+            padx=14,
+            pady=12,
         )
-        k_frame.pack(fill="x", anchor="w", pady=(12, 0))
+        k_frame.pack(fill="x", anchor="w", pady=(16, 0))
+        k_frame.columnconfigure(1, weight=1)
         tk.Label(
             k_frame,
-            text="k-анонимизация",
+            text="Параметры k-анонимизации",
             background="#F0F3F7",
             foreground="#20384D",
-            font=("Segoe UI", 10, "bold"),
-        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+            font=("Segoe UI", 11, "bold"),
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
         tk.Label(
             k_frame,
             text="Значение k по умолчанию:",
@@ -252,42 +254,90 @@ class SettingsWindow(tk.Toplevel):
             from_=2,
             to=1000000,
             textvariable=self.default_k,
-            width=8,
+            width=12,
+            justify="right",
         )
-        self.default_k_input.grid(row=1, column=1, sticky="w", padx=(12, 0))
-        ToolTip(self.default_k_input, "Минимальный размер каждой группы по умолчанию. Отдельный QI-профиль может переопределить это значение.")
+        self.default_k_input.grid(row=1, column=1, sticky="w", padx=(16, 0))
+        ToolTip(
+            self.default_k_input,
+            "Минимальный размер каждой группы по умолчанию. "
+            "Отдельный QI-профиль может переопределить это значение.",
+        )
         tk.Label(
             k_frame,
             text="Представитель числовой группы:",
             background="#F0F3F7",
             foreground="#20384D",
-        ).grid(row=2, column=0, sticky="w", pady=(7, 0))
+        ).grid(row=2, column=0, sticky="w", pady=(10, 0))
         self.representative_select = ttk.Combobox(
             k_frame,
             state="readonly",
             values=("mean", "median", "medoid"),
             textvariable=self.numeric_representative,
-            width=10,
+            width=14,
         )
-        self.representative_select.grid(row=2, column=1, sticky="w", padx=(12, 0), pady=(7, 0))
-        ToolTip(self.representative_select, "Среднее, медиана или существующая запись-медоид как замена числовых значений кластера.")
+        self.representative_select.grid(
+            row=2,
+            column=1,
+            sticky="w",
+            padx=(16, 0),
+            pady=(10, 0),
+        )
+        ToolTip(
+            self.representative_select,
+            "Среднее, медиана или существующая запись-медоид как замена "
+            "числовых значений кластера.",
+        )
 
-        buttons = ttk.Frame(container, style="Settings.TFrame")
-        buttons.pack(side="bottom", fill="x", pady=(18, 0))
+        buttons = ttk.Frame(shell, style="Settings.TFrame", padding=(18, 10, 18, 16))
+        buttons.grid(row=1, column=0, columnspan=2, sticky="ew")
+        buttons.columnconfigure(0, weight=1)
         ttk.Button(buttons, text="Сохранить", command=self._save).pack(side="right")
         ttk.Button(buttons, text="Отмена", command=self.destroy).pack(
-            side="right", padx=(0, 8)
+            side="right", padx=(0, 10)
         )
 
         self._toggle_threshold()
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.grab_set()
         self.update_idletasks()
         self._center_on_parent(parent)
 
+    @staticmethod
+    def _create_anonymization_check(
+        parent: tk.Misc,
+        label: str,
+        variable: tk.BooleanVar,
+        command: Callable[[], None] | None = None,
+    ) -> tk.Checkbutton:
+        checkbox = tk.Checkbutton(
+            parent,
+            text=label,
+            variable=variable,
+            command=command,
+            background=ANONYMIZATION_BACKGROUND,
+            foreground="#20384D",
+            activebackground=ANONYMIZATION_BACKGROUND,
+            activeforeground="#20384D",
+            selectcolor="#FFFFFF",
+            anchor="w",
+            justify="left",
+            padx=2,
+            pady=4,
+            font=("Segoe UI", 10),
+        )
+        checkbox.pack(fill="x")
+        return checkbox
+
     def _center_on_parent(self, parent: tk.Misc) -> None:
-        x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
-        y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
-        self.geometry(f"+{max(0, x)}+{max(0, y)}")
+        self.update_idletasks()
+        width = min(self.winfo_width(), self.winfo_screenwidth() - 40)
+        height = min(self.winfo_height(), self.winfo_screenheight() - 60)
+        x = parent.winfo_rootx() + (parent.winfo_width() - width) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - height) // 2
+        x = max(20, min(x, self.winfo_screenwidth() - width - 20))
+        y = max(20, min(y, self.winfo_screenheight() - height - 40))
+        self.geometry(f"{width}x{height}+{x}+{y}")
 
     def _on_tokenization_selected(self) -> None:
         if self.tokenize_direct_identifiers.get():
@@ -298,10 +348,9 @@ class SettingsWindow(tk.Toplevel):
             self.tokenize_direct_identifiers.set(False)
 
     def _toggle_threshold(self) -> None:
-        if self.detect_nominal.get():
-            self.threshold_frame.pack(fill="x", anchor="w", pady=(10, 0))
-        else:
-            self.threshold_frame.pack_forget()
+        self.threshold_input.configure(
+            state="normal" if self.detect_nominal.get() else "disabled"
+        )
 
     def _save(self) -> None:
         try:
@@ -325,10 +374,18 @@ class SettingsWindow(tk.Toplevel):
         try:
             default_k = int(self.default_k.get())
         except ValueError:
-            messagebox.showerror("Некорректное значение", "Значение k должно быть целым числом не меньше 2.", parent=self)
+            messagebox.showerror(
+                "Некорректное значение",
+                "Значение k должно быть целым числом не меньше 2.",
+                parent=self,
+            )
             return
         if default_k < 2:
-            messagebox.showerror("Некорректное значение", "Значение k должно быть не меньше 2.", parent=self)
+            messagebox.showerror(
+                "Некорректное значение",
+                "Значение k должно быть не меньше 2.",
+                parent=self,
+            )
             return
 
         settings = AppSettings(

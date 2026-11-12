@@ -195,6 +195,52 @@ def _numeric_medoid_index(
     return min(indices, key=lambda index: (totals[index], index))
 
 
+def _round_to_integer(value: float) -> int:
+    """Округляет половинные значения от нуля, сохраняя целочисленный смысл поля."""
+    return int(np.sign(value) * np.floor(abs(value) + 0.5))
+
+
+def _nullable_integer_dtype(dtype: Any) -> str:
+    dtype_name = str(dtype).lower()
+    mapping = {
+        "int8": "Int8",
+        "int16": "Int16",
+        "int32": "Int32",
+        "int64": "Int64",
+        "uint8": "UInt8",
+        "uint16": "UInt16",
+        "uint32": "UInt32",
+        "uint64": "UInt64",
+    }
+    return mapping.get(dtype_name, "Int64")
+
+
+def _restore_numeric_series(
+    original: pd.Series,
+    values: list[Any],
+    index: pd.Index,
+) -> pd.Series:
+    dtype = original.dtype
+    if pd.api.types.is_integer_dtype(dtype):
+        if any(_is_missing(value) for value in values):
+            return pd.Series(values, index=index, dtype=_nullable_integer_dtype(dtype))
+        return pd.Series(values, index=index, dtype=dtype)
+
+    if pd.api.types.is_float_dtype(dtype):
+        normalized = [np.nan if _is_missing(value) else value for value in values]
+        return pd.Series(normalized, index=index, dtype=dtype)
+
+    non_missing = original.dropna()
+    if len(non_missing) and non_missing.map(lambda value: isinstance(value, str)).all():
+        normalized = [
+            pd.NA if _is_missing(value) else str(value)
+            for value in values
+        ]
+        return pd.Series(normalized, index=index, dtype=object)
+
+    return pd.Series(values, index=index, dtype=object)
+
+
 def microaggregate_component(
     dataframe: pd.DataFrame,
     component: dict,
@@ -220,8 +266,6 @@ def microaggregate_component(
     )
 
     result = dataframe.copy(deep=True)
-    for column in columns:
-        result[column] = result[column].astype(object)
     hierarchy_map = hierarchies or {}
     suppression_counts: dict[str, int] = defaultdict(int)
     generalization_levels: dict[str, int] = defaultdict(int)
@@ -229,12 +273,21 @@ def microaggregate_component(
     numeric_within_group_sse: dict[str, float] = defaultdict(float)
     normalized_numeric_within_group_sse: dict[str, float] = defaultdict(float)
     column_operations: dict[str, str] = {}
-
+    transformed_values = {
+        column: dataframe[column].tolist()
+        for column in columns
+    }
+    metric_by_column = {metric.name: metric for metric in distance.metrics}
     numeric_columns = [metric.name for metric in distance.metrics if metric.kind == "numeric"]
+
     for cluster_number, indices in enumerate(clusters, start=1):
-        medoid_index = _numeric_medoid_index(indices, distance) if representative == "medoid" and numeric_columns else None
+        medoid_index = (
+            _numeric_medoid_index(indices, distance)
+            if representative == "medoid" and numeric_columns
+            else None
+        )
         for column in columns:
-            metric = next(item for item in distance.metrics if item.name == column)
+            metric = metric_by_column[column]
             source_values = dataframe.iloc[indices][column].tolist()
             if metric.kind == "numeric":
                 numeric_values = pd.to_numeric(
@@ -244,7 +297,7 @@ def microaggregate_component(
                 if numeric_values.isna().all():
                     value = pd.NA
                 elif numeric_values.isna().any():
-                    value = SUPPRESSION_LABEL
+                    value = pd.NA
                     suppression_counts[column] += len(indices)
                 else:
                     group_mean = float(valid_values.mean())
@@ -254,16 +307,25 @@ def microaggregate_component(
                         value = dataframe.iloc[medoid_index][column]
                     else:
                         value = group_mean
+
+                    if pd.api.types.is_integer_dtype(dataframe[column].dtype):
+                        value = int(value) if representative == "medoid" else _round_to_integer(float(value))
+                    elif pd.api.types.is_float_dtype(dataframe[column].dtype):
+                        value = float(value)
+
                     published_center = float(value)
                     raw_sse = float(((valid_values - published_center) ** 2).sum())
-                    scale = next(item.scale for item in distance.metrics if item.name == column)
+                    scale = metric.scale
                     numeric_within_group_sse[column] += raw_sse
                     normalized_numeric_within_group_sse[column] += raw_sse / (scale ** 2)
-                result.iloc[indices, result.columns.get_loc(column)] = value
+
+                for index in indices:
+                    transformed_values[column][index] = value
                 column_operations[column] = f"микроагрегация ({representative})"
             elif metric.kind == "date":
                 value, level, suppressed = _date_generalization(source_values)
-                result.iloc[indices, result.columns.get_loc(column)] = value
+                for index in indices:
+                    transformed_values[column][index] = value
                 generalization_levels[column] = max(generalization_levels[column], level)
                 if suppressed:
                     suppression_counts[column] += len(indices)
@@ -273,12 +335,28 @@ def microaggregate_component(
                     source_values,
                     hierarchy_map.get(column, []),
                 )
-                result.iloc[indices, result.columns.get_loc(column)] = value
+                for index in indices:
+                    transformed_values[column][index] = value
                 generalization_levels[column] = max(generalization_levels[column], level)
                 if suppressed:
                     suppression_counts[column] += len(indices)
                 column_operations[column] = "пользовательская иерархия категорий; иначе подавление"
         cluster_details.append({"cluster": cluster_number, "size": len(indices)})
+
+    for column in columns:
+        metric = metric_by_column[column]
+        if metric.kind == "numeric":
+            result[column] = _restore_numeric_series(
+                dataframe[column],
+                transformed_values[column],
+                dataframe.index,
+            )
+        else:
+            result[column] = pd.Series(
+                transformed_values[column],
+                index=dataframe.index,
+                dtype=object,
+            )
 
     return result, {
         "component_id": component["id"],
