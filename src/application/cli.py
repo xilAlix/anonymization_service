@@ -41,8 +41,10 @@ from infrastructure.attribute_profile_store import (
 )
 from infrastructure.settings_manager import DEFAULT_SETTINGS_PATH, load_settings
 from application.k_anonymization_workflow import (
+    LDiversityViolationError,
     execute_k_anonymization,
     evaluate_current_k,
+    evaluate_current_l,
     save_k_anonymity_report,
 )
 
@@ -322,6 +324,12 @@ def build_parser() -> argparse.ArgumentParser:
     k_anonymize_parser.add_argument("--k", type=int, help="Общее значение k. По умолчанию берётся из настроек.")
     k_anonymize_parser.add_argument("--representative", choices=("mean", "median", "medoid"), help="Представитель числовой группы.")
     k_anonymize_parser.add_argument("--report-json", type=Path, help="Путь к подробному JSON-отчёту.")
+    k_l_group = k_anonymize_parser.add_mutually_exclusive_group()
+    k_l_group.add_argument("--l-diversity", dest="enable_l_diversity", action="store_true", help="Включить проверку l-разнообразия независимо от настройки.")
+    k_l_group.add_argument("--no-l-diversity", dest="enable_l_diversity", action="store_false", help="Отключить проверку l-разнообразия для этого запуска.")
+    k_anonymize_parser.set_defaults(enable_l_diversity=None)
+    k_anonymize_parser.add_argument("--l", type=int, help="Переопределить значение l (само по себе включает l-проверку).")
+    k_anonymize_parser.add_argument("--l-variant", choices=("distinct", "entropy", "both"), help="Вариант l-проверки.")
     k_anonymize_parser.add_argument("--overwrite", action="store_true", help="Разрешить перезапись выходного CSV и отчёта.")
 
     k_evaluate_parser = subparsers.add_parser(
@@ -330,6 +338,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     k_evaluate_parser.add_argument("csv_path", type=Path)
     k_evaluate_parser.add_argument("--k", type=int, help="Общее значение k. По умолчанию берётся из настроек.")
+
+    l_evaluate_parser = subparsers.add_parser(
+        "evaluate-l-diversity",
+        help="Проверить l-разнообразие существующего CSV по активным QI-профилям и ручным sensitive-ролям.",
+    )
+    l_evaluate_parser.add_argument("csv_path", type=Path)
+    l_evaluate_parser.add_argument("--l", type=int, help="Значение l; по умолчанию берётся из настроек.")
+    l_evaluate_parser.add_argument("--variant", choices=("distinct", "entropy", "both"), help="Критерий; по умолчанию берётся из настроек.")
+    l_evaluate_parser.add_argument("--report-json", type=Path, help="Сохранить подробный отчёт проверки.")
+    l_evaluate_parser.add_argument(
+        "--profile-source",
+        type=Path,
+        help="Исходный CSV, к которому привязаны ручные роли и QI-профили (для проверки отдельного выходного файла).",
+    )
 
     selected_anonymize_parser = subparsers.add_parser(
         "anonymize-selected",
@@ -348,6 +370,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Путь к подробному JSON-отчёту k-анонимизации.",
     )
+    selected_l_group = selected_anonymize_parser.add_mutually_exclusive_group()
+    selected_l_group.add_argument("--l-diversity", dest="enable_l_diversity", action="store_true", help="Включить проверку l-разнообразия независимо от настройки.")
+    selected_l_group.add_argument("--no-l-diversity", dest="enable_l_diversity", action="store_false", help="Отключить проверку l-разнообразия для этого запуска.")
+    selected_anonymize_parser.set_defaults(enable_l_diversity=None)
+    selected_anonymize_parser.add_argument("--l", type=int, help="Переопределить значение l (само по себе включает l-проверку).")
+    selected_anonymize_parser.add_argument("--l-variant", choices=("distinct", "entropy", "both"), help="Вариант l-проверки.")
     selected_anonymize_parser.add_argument(
         "--overwrite",
         action="store_true",
@@ -584,6 +612,35 @@ def run_cli(arguments: list[str]) -> int:
                 )
             return 0 if all(item["satisfied"] for item in results) else 1
 
+        if args.command == "evaluate-l-diversity":
+            dataframe = load_csv(args.csv_path)
+            settings = load_settings(SETTINGS_PATH)
+            l_value = args.l if args.l is not None else settings.k_anonymization.default_l
+            variant = args.variant or settings.k_anonymization.l_diversity_variant
+            report = evaluate_current_l(
+                dataframe,
+                args.profile_source or args.csv_path,
+                l_value=l_value,
+                variant=variant,
+                profile_path=PROFILE_PATH,
+            )
+            if args.report_json:
+                save_k_anonymity_report(report, args.report_json)
+                print(f"Отчёт: {args.report_json}")
+            print(
+                f"l={report['l']} | вариант={report['variant']} | "
+                f"проверок={report['check_count']} | "
+                f"нарушений={report['failed_check_count']} | "
+                f"статус={report['status']}"
+            )
+            for profile in report["profiles"]:
+                print(
+                    f"{profile['profile_name']}: проверок={profile['check_count']}, "
+                    f"нарушений={profile['failed_check_count']}, "
+                    f"статус={'выполнено' if profile['satisfied'] else 'не выполнено'}"
+                )
+            return 0 if report["status"] == "satisfied" else 1
+
         if args.command == "k-anonymize":
             input_path = args.input_csv.resolve()
             output_path = args.output_csv.resolve()
@@ -594,6 +651,15 @@ def run_cli(arguments: list[str]) -> int:
             settings = load_settings(SETTINGS_PATH)
             k_value = args.k if args.k is not None else settings.k_anonymization.default_k
             representative = args.representative or settings.k_anonymization.numeric_representative
+            enable_l_diversity = (
+                settings.k_anonymization.enable_l_diversity
+                if args.enable_l_diversity is None
+                else args.enable_l_diversity
+            )
+            if args.l is not None or args.l_variant is not None:
+                enable_l_diversity = True
+            l_value = args.l if args.l is not None else settings.k_anonymization.default_l
+            l_variant = args.l_variant or settings.k_anonymization.l_diversity_variant
             if k_value < 2:
                 raise ValueError("k должно быть не меньше 2.")
             dataframe = load_csv(input_path)
@@ -603,6 +669,9 @@ def run_cli(arguments: list[str]) -> int:
                 default_k=k_value,
                 representative=representative,
                 profile_path=PROFILE_PATH,
+                enable_l_diversity=enable_l_diversity,
+                default_l=l_value,
+                l_variant=l_variant,
             )
             report_path = args.report_json or output_path.with_name(output_path.stem + "_k_report.json")
             if report_path.exists() and not args.overwrite:
@@ -627,7 +696,14 @@ def run_cli(arguments: list[str]) -> int:
                 )
             print(f"Результат: {output_path}")
             print(f"Подробный отчёт: {report_path}")
-            print("Важно: k-анонимность не гарантирует l-разнообразие, t-близость или DP.")
+            if report.get("l_diversity", {}).get("status") == "satisfied":
+                print(
+                    f"l-разнообразие подтверждено: l={l_value}, "
+                    f"вариант={l_variant}, проверок={report['l_diversity']['check_count']}."
+                )
+            else:
+                print("Важно: l-разнообразие в этом запуске не проверялось.")
+            print("Важно: k-анонимность и l-разнообразие не гарантируют t-близость или дифференциальную приватность.")
             return 0
 
         if args.command == "anonymize-selected":
@@ -663,6 +739,13 @@ def run_cli(arguments: list[str]) -> int:
                     args.representative
                     or settings.k_anonymization.numeric_representative
                 ),
+                enable_l_diversity=(
+                    (settings.k_anonymization.enable_l_diversity if args.enable_l_diversity is None else args.enable_l_diversity)
+                    or args.l is not None
+                    or args.l_variant is not None
+                ),
+                default_l=(args.l if args.l is not None else settings.k_anonymization.default_l),
+                l_variant=(args.l_variant or settings.k_anonymization.l_diversity_variant),
             )
 
             report_path = None
@@ -739,6 +822,28 @@ def run_cli(arguments: list[str]) -> int:
             print(f"Результат сохранён: {output_path}")
             return 0
 
+    except LDiversityViolationError as error:
+        print(f"Ошибка: {error}", file=sys.stderr)
+        output_csv = getattr(args, "output_csv", None)
+        report_path = getattr(args, "report_json", None)
+        if report_path is None and output_csv is not None:
+            report_path = output_csv.with_name(output_csv.stem + "_l_diversity_failed_report.json")
+        if report_path is not None:
+            report_path = Path(report_path).resolve()
+            output_path = Path(output_csv).resolve() if output_csv is not None else None
+            input_path = getattr(args, "input_csv", None)
+            input_path = Path(input_path).resolve() if input_path is not None else None
+            if report_path not in {output_path, input_path}:
+                if report_path.exists() and not getattr(args, "overwrite", False):
+                    print(
+                        f"Диагностический отчёт не записан: файл уже существует {report_path}. "
+                        "Для перезаписи укажи --overwrite.",
+                        file=sys.stderr,
+                    )
+                else:
+                    save_k_anonymity_report(error.report, report_path)
+                    print(f"Диагностический отчёт: {report_path}", file=sys.stderr)
+        return 2
     except (OSError, ValueError, RuntimeError, pd.errors.ParserError) as error:
         print(f"Ошибка: {error}", file=sys.stderr)
         return 2

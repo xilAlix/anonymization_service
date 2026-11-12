@@ -68,6 +68,13 @@ class SettingsWindow(tk.Toplevel):
         self.numeric_representative = tk.StringVar(
             value=settings.k_anonymization.numeric_representative
         )
+        self.enable_l_diversity = tk.BooleanVar(
+            value=settings.k_anonymization.enable_l_diversity
+        )
+        self.default_l = tk.StringVar(value=str(settings.k_anonymization.default_l))
+        self.l_diversity_variant = tk.StringVar(
+            value=settings.k_anonymization.l_diversity_variant
+        )
 
         shell = ttk.Frame(self, style="Settings.TFrame")
         shell.pack(fill="both", expand=True)
@@ -289,6 +296,57 @@ class SettingsWindow(tk.Toplevel):
             "числовых значений кластера.",
         )
 
+        self.l_diversity_check = ttk.Checkbutton(
+            k_frame,
+            text="Проверять l-разнообразие после k-анонимизации",
+            variable=self.enable_l_diversity,
+            command=self._toggle_l_controls,
+        )
+        self.l_diversity_check.grid(
+            row=3, column=0, columnspan=2, sticky="w", pady=(16, 0)
+        )
+        ToolTip(
+            self.l_diversity_check,
+            "После k-анонимизации проверяет вручную назначенные конфиденциальные "
+            "атрибуты. Если l-разнообразие не выполнено, результат не сохраняется.",
+        )
+        tk.Label(
+            k_frame,
+            text="Значение l:",
+            background="#F0F3F7",
+            foreground="#20384D",
+        ).grid(row=4, column=0, sticky="w", pady=(10, 0))
+        self.default_l_input = ttk.Spinbox(
+            k_frame,
+            from_=2,
+            to=1000000,
+            textvariable=self.default_l,
+            width=12,
+            justify="right",
+        )
+        self.default_l_input.grid(row=4, column=1, sticky="w", padx=(16, 0), pady=(10, 0))
+        tk.Label(
+            k_frame,
+            text="Критерии l-разнообразия:",
+            background="#F0F3F7",
+            foreground="#20384D",
+        ).grid(row=5, column=0, sticky="w", pady=(10, 0))
+        self.l_variant_select = ttk.Combobox(
+            k_frame,
+            state="readonly",
+            values=("distinct", "entropy", "both"),
+            textvariable=self.l_diversity_variant,
+            width=14,
+        )
+        self.l_variant_select.grid(
+            row=5, column=1, sticky="w", padx=(16, 0), pady=(10, 0)
+        )
+        ToolTip(
+            self.l_variant_select,
+            "Distinct проверяет число уникальных значений; Entropy учитывает "
+            "частоты значений; Both требует прохождения обоих критериев.",
+        )
+
         buttons = ttk.Frame(shell, style="Settings.TFrame", padding=(18, 10, 18, 16))
         buttons.grid(row=1, column=0, columnspan=2, sticky="ew")
         buttons.columnconfigure(0, weight=1)
@@ -298,6 +356,7 @@ class SettingsWindow(tk.Toplevel):
         )
 
         self._toggle_threshold()
+        self._toggle_l_controls()
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.grab_set()
         self.update_idletasks()
@@ -352,6 +411,11 @@ class SettingsWindow(tk.Toplevel):
             state="normal" if self.detect_nominal.get() else "disabled"
         )
 
+    def _toggle_l_controls(self) -> None:
+        state = "normal" if self.enable_l_diversity.get() else "disabled"
+        self.default_l_input.configure(state=state)
+        self.l_variant_select.configure(state="readonly" if state == "normal" else "disabled")
+
     def _save(self) -> None:
         try:
             threshold = float(self.threshold.get().replace(",", "."))
@@ -388,6 +452,23 @@ class SettingsWindow(tk.Toplevel):
             )
             return
 
+        try:
+            default_l = int(self.default_l.get())
+        except ValueError:
+            messagebox.showerror(
+                "Некорректное значение",
+                "Значение l должно быть целым числом не меньше 2.",
+                parent=self,
+            )
+            return
+        if default_l < 2:
+            messagebox.showerror(
+                "Некорректное значение",
+                "Значение l должно быть не меньше 2.",
+                parent=self,
+            )
+            return
+
         settings = AppSettings(
             data_type_analysis=DataTypeAnalysisSettings(
                 detect_nominal_attributes=self.detect_nominal.get(),
@@ -403,6 +484,9 @@ class SettingsWindow(tk.Toplevel):
                 default_k=default_k,
                 max_row_suppression_percent=5.0,
                 numeric_representative=self.numeric_representative.get(),
+                enable_l_diversity=self.enable_l_diversity.get(),
+                default_l=default_l,
+                l_diversity_variant=self.l_diversity_variant.get(),
             ),
         )
         try:

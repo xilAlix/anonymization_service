@@ -1,17 +1,20 @@
 {
   "data_type_analysis": {
-    "detect_nominal_attributes": false,
+    "detect_nominal_attributes": true,
     "nominal_unique_threshold_percent": 10.0,
-    "enable_multiple_quasi_identifier_groups": false
+    "enable_multiple_quasi_identifier_groups": true
   },
   "anonymization": {
     "tokenize_direct_identifiers": true,
     "remove_direct_identifiers": false,
-    "enable_k_anonymity": false
+    "enable_k_anonymity": true
   },
   "k_anonymization": {
     "default_k": 5,
     "max_row_suppression_percent": 5.0,
-    "numeric_representative": "mean"
+    "numeric_representative": "medoid",
+    "enable_l_diversity": false,
+    "default_l": 2,
+    "l_diversity_variant": "distinct"
   }
 }

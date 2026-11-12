@@ -6,6 +6,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 import pandas as pd
 
 from application.k_anonymization_workflow import (
+    LDiversityViolationError,
     execute_k_anonymization,
     save_k_anonymity_report,
 )
@@ -424,9 +425,24 @@ class TableViewer(tk.Tk):
                 self.current_file_path,
                 default_k=k_value,
                 representative=self.settings.k_anonymization.numeric_representative,
+                enable_l_diversity=self.settings.k_anonymization.enable_l_diversity,
+                default_l=self.settings.k_anonymization.default_l,
+                l_variant=self.settings.k_anonymization.l_diversity_variant,
             )
             save_csv(result, destination)
             save_k_anonymity_report(report, report_path)
+        except LDiversityViolationError as error:
+            try:
+                save_k_anonymity_report(error.report, report_path)
+                details = f"\n\nДиагностический отчёт: {report_path}"
+            except OSError as report_error:
+                details = f"\n\nНе удалось сохранить отчёт: {report_error}"
+            messagebox.showerror(
+                "l-разнообразие не выполнено",
+                str(error) + details,
+                parent=self,
+            )
+            return
         except (OSError, ValueError, RuntimeError) as error:
             messagebox.showerror("k-анонимизация не выполнена", str(error), parent=self)
             return
@@ -436,10 +452,19 @@ class TableViewer(tk.Tk):
             f"{item['group_name']}: k={item['required_k']}, минимум в классе={item['minimum_equivalence_class_size']}"
             for item in report["profiles"]
         ]
+        l_status = report.get("l_diversity", {}).get("status")
+        l_message = (
+            f"\n\nПроверка l-разнообразия пройдена: l={report['l_diversity']['l']}, "
+            f"вариант={report['l_diversity']['variant']}, "
+            f"проверок={report['l_diversity']['check_count']}."
+            if l_status == "satisfied"
+            else "\n\nПроверка l-разнообразия не выполнялась."
+        )
         messagebox.showinfo(
             "k-анонимизация завершена",
             "Все активные QI-профили прошли проверку k-анонимности.\n\n"
             + "\n".join(profile_lines)
+            + l_message
             + f"\n\nРезультат: {destination}\nОтчёт: {report_path}",
             parent=self,
         )
@@ -501,7 +526,30 @@ class TableViewer(tk.Tk):
                 operations,
                 default_k=self.settings.k_anonymization.default_k,
                 representative=self.settings.k_anonymization.numeric_representative,
+                enable_l_diversity=self.settings.k_anonymization.enable_l_diversity,
+                default_l=self.settings.k_anonymization.default_l,
+                l_variant=self.settings.k_anonymization.l_diversity_variant,
             )
+        except LDiversityViolationError as error:
+            report_path = filedialog.asksaveasfilename(
+                parent=self,
+                title="Сохранить диагностический отчёт l-разнообразия",
+                defaultextension=".json",
+                initialfile=f"{self.current_file_path.stem}_l_diversity_failed_report.json",
+                filetypes=(("JSON-файлы", "*.json"),),
+            )
+            if report_path:
+                try:
+                    save_k_anonymity_report(error.report, report_path)
+                except OSError as report_error:
+                    messagebox.showerror("Ошибка сохранения отчёта", str(report_error), parent=self)
+                    return
+            messagebox.showerror(
+                "l-разнообразие не выполнено",
+                str(error) + (f"\n\nОтчёт: {report_path}" if report_path else ""),
+                parent=self,
+            )
+            return
         except (OSError, ValueError, RuntimeError) as error:
             messagebox.showerror(
                 "Невозможно выполнить операцию",
@@ -570,6 +618,12 @@ class TableViewer(tk.Tk):
         ]
         if execution.k_report is not None and report_path is not None:
             details.append(f"Отчёт k-анонимизации: {report_path}")
+            l_report = execution.k_report.get("l_diversity", {})
+            if l_report.get("status") == "satisfied":
+                details.append(
+                    f"l-разнообразие подтверждено: l={l_report['l']}, "
+                    f"вариант={l_report['variant']}, проверок={l_report['check_count']}"
+                )
         if TOKENIZE_DIRECT_IDENTIFIERS in execution.operations:
             details.append(
                 "Токенизация является псевдонимизацией и сама по себе "

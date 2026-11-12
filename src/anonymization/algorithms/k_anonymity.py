@@ -200,6 +200,18 @@ def _round_to_integer(value: float) -> int:
     return int(np.sign(value) * np.floor(abs(value) + 0.5))
 
 
+def _has_integer_semantics(series: pd.Series) -> bool:
+    if pd.api.types.is_integer_dtype(series.dtype):
+        return True
+    if not pd.api.types.is_float_dtype(series.dtype) or not series.isna().any():
+        return False
+    numeric = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    if numeric.empty:
+        return False
+    values = numeric.to_numpy(dtype=float)
+    return bool(np.equal(values, np.trunc(values)).all())
+
+
 def _nullable_integer_dtype(dtype: Any) -> str:
     dtype_name = str(dtype).lower()
     mapping = {
@@ -219,12 +231,19 @@ def _restore_numeric_series(
     original: pd.Series,
     values: list[Any],
     index: pd.Index,
+    integer_semantics: bool,
 ) -> pd.Series:
     dtype = original.dtype
-    if pd.api.types.is_integer_dtype(dtype):
+    if integer_semantics:
+        if pd.api.types.is_integer_dtype(dtype):
+            integer_dtype = _nullable_integer_dtype(dtype)
+        else:
+            integer_dtype = "Int64"
         if any(_is_missing(value) for value in values):
-            return pd.Series(values, index=index, dtype=_nullable_integer_dtype(dtype))
-        return pd.Series(values, index=index, dtype=dtype)
+            return pd.Series(values, index=index, dtype=integer_dtype)
+        if pd.api.types.is_integer_dtype(dtype):
+            return pd.Series(values, index=index, dtype=dtype)
+        return pd.Series(values, index=index, dtype="int64")
 
     if pd.api.types.is_float_dtype(dtype):
         normalized = [np.nan if _is_missing(value) else value for value in values]
@@ -279,6 +298,10 @@ def microaggregate_component(
     }
     metric_by_column = {metric.name: metric for metric in distance.metrics}
     numeric_columns = [metric.name for metric in distance.metrics if metric.kind == "numeric"]
+    integer_semantics = {
+        column: _has_integer_semantics(dataframe[column])
+        for column in numeric_columns
+    }
 
     for cluster_number, indices in enumerate(clusters, start=1):
         medoid_index = (
@@ -308,7 +331,7 @@ def microaggregate_component(
                     else:
                         value = group_mean
 
-                    if pd.api.types.is_integer_dtype(dataframe[column].dtype):
+                    if integer_semantics[column]:
                         value = int(value) if representative == "medoid" else _round_to_integer(float(value))
                     elif pd.api.types.is_float_dtype(dataframe[column].dtype):
                         value = float(value)
@@ -350,6 +373,7 @@ def microaggregate_component(
                 dataframe[column],
                 transformed_values[column],
                 dataframe.index,
+                integer_semantics[column],
             )
         else:
             result[column] = pd.Series(

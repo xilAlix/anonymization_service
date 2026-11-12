@@ -27,6 +27,9 @@ class KAnonymizationSettings:
     default_k: int = 5
     max_row_suppression_percent: float = 5.0
     numeric_representative: str = "mean"
+    enable_l_diversity: bool = False
+    default_l: int = 2
+    l_diversity_variant: str = "both"
 
 
 @dataclass(frozen=True)
@@ -127,6 +130,15 @@ def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
     representative = k_anonymization.get("numeric_representative", "mean")
     if representative not in {"mean", "median", "medoid"}:
         raise ValueError("Способ замены числовых значений должен быть mean, median или medoid.")
+    enable_l_diversity = k_anonymization.get("enable_l_diversity", False)
+    if not isinstance(enable_l_diversity, bool):
+        raise ValueError("Параметр enable_l_diversity должен быть логическим.")
+    raw_default_l = k_anonymization.get("default_l", 2)
+    if isinstance(raw_default_l, bool) or not isinstance(raw_default_l, int) or raw_default_l < 2:
+        raise ValueError("Значение l по умолчанию должно быть целым числом не меньше 2.")
+    l_variant = k_anonymization.get("l_diversity_variant", "both")
+    if not isinstance(l_variant, str) or l_variant not in {"distinct", "entropy", "both"}:
+        raise ValueError("Вариант l-разнообразия должен быть distinct, entropy или both.")
 
     return AppSettings(
         data_type_analysis=DataTypeAnalysisSettings(
@@ -143,6 +155,9 @@ def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
             default_k=raw_default_k,
             max_row_suppression_percent=max_row_suppression,
             numeric_representative=representative,
+            enable_l_diversity=enable_l_diversity,
+            default_l=raw_default_l,
+            l_diversity_variant=l_variant,
         ),
     )
 
@@ -204,6 +219,12 @@ def save_settings(
         raise ValueError("Ограничение подавления строк должно находиться от 0 до 5%.")
     if k_settings.numeric_representative not in {"mean", "median", "medoid"}:
         raise ValueError("Способ замены числовых значений должен быть mean, median или medoid.")
+    if not isinstance(k_settings.enable_l_diversity, bool):
+        raise ValueError("Параметр enable_l_diversity должен быть логическим.")
+    if isinstance(k_settings.default_l, bool) or not isinstance(k_settings.default_l, int) or k_settings.default_l < 2:
+        raise ValueError("Значение l по умолчанию должно быть целым числом не меньше 2.")
+    if not isinstance(k_settings.l_diversity_variant, str) or k_settings.l_diversity_variant not in {"distinct", "entropy", "both"}:
+        raise ValueError("Вариант l-разнообразия должен быть distinct, entropy или both.")
 
     payload = {
         "data_type_analysis": {
@@ -220,6 +241,9 @@ def save_settings(
             "default_k": k_settings.default_k,
             "max_row_suppression_percent": max_row_suppression,
             "numeric_representative": k_settings.numeric_representative,
+            "enable_l_diversity": k_settings.enable_l_diversity,
+            "default_l": k_settings.default_l,
+            "l_diversity_variant": k_settings.l_diversity_variant,
         },
     }
     settings_path.parent.mkdir(parents=True, exist_ok=True)

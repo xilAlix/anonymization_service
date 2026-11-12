@@ -100,6 +100,9 @@ def apply_anonymization_operations(
     profile_path: str | Path = DEFAULT_PROFILE_PATH,
     default_k: int = 5,
     representative: str = "mean",
+    enable_l_diversity: bool = False,
+    default_l: int = 2,
+    l_variant: str = "both",
 ) -> AnonymizationExecutionResult:
     if not operations:
         raise ValueError("Не выбрана ни одна операция анонимизации.")
@@ -143,6 +146,9 @@ def apply_anonymization_operations(
             default_k=default_k,
             representative=representative,
             profile_path=profile_path,
+            enable_l_diversity=enable_l_diversity,
+            default_l=default_l,
+            l_variant=l_variant,
         )
         for component in k_report.get("components", []):
             affected_columns.extend(component.get("attributes", []))
