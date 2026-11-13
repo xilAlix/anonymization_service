@@ -7,14 +7,14 @@
   "anonymization": {
     "tokenize_direct_identifiers": true,
     "remove_direct_identifiers": false,
-    "enable_k_anonymity": true
+    "enable_k_anonymity": false
   },
   "k_anonymization": {
     "default_k": 5,
     "max_row_suppression_percent": 5.0,
-    "numeric_representative": "medoid",
-    "enable_l_diversity": false,
-    "default_l": 2,
-    "l_diversity_variant": "distinct"
+    "numeric_representative": "median",
+    "enable_l_diversity": true,
+    "default_l": 500,
+    "l_diversity_variant": "both"
   }
 }

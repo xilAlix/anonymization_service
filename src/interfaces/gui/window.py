@@ -168,27 +168,74 @@ class TableViewer(tk.Tk):
         content = ttk.Frame(self, padding=(12, 10), style="App.TFrame")
         content.grid(row=0, column=0, sticky="nsew")
         content.columnconfigure(0, weight=1)
-        content.rowconfigure(1, weight=1)
+        content.rowconfigure(3, weight=1)
 
         toolbar = ttk.Frame(content, style="App.TFrame")
-        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 9))
-        self.table_info = tk.StringVar(value="Таблица не загружена")
-        ttk.Label(toolbar, textvariable=self.table_info, style="App.TLabel").pack(
-            side="left", padx=(0, 12)
+        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        self.open_button = ttk.Button(toolbar, text="Открыть CSV", command=self.open_csv)
+        self.open_button.pack(side="left", padx=(0, 5))
+        self.example_button = ttk.Button(toolbar, text="Пример", command=self.open_example)
+        self.example_button.pack(side="left", padx=5)
+        self.types_button = ttk.Button(
+            toolbar, text="Типы данных", command=self.show_column_types, state="disabled"
         )
+        self.types_button.pack(side="left", padx=5)
+        self.classification_button = ttk.Button(
+            toolbar, text="Роли столбцов", command=self.show_attribute_classification,
+            state="disabled"
+        )
+        self.classification_button.pack(side="left", padx=5)
+        self.qi_groups_button = ttk.Button(
+            toolbar, text="Группы QI", command=self.show_quasi_identifier_groups,
+            state="disabled"
+        )
+        self.qi_groups_button.pack(side="left", padx=5)
+        self.settings_button = ttk.Button(toolbar, text="Настройки", command=self.open_settings)
+        self.settings_button.pack(side="left", padx=5)
+        ToolTip(self.classification_button, "Назначьте столбцам роли: идентификатор, квази-идентификатор, конфиденциальный или аналитический атрибут.")
+        ToolTip(self.qi_groups_button, "Проверьте, какие сочетания столбцов могут быть известны внешнему источнику. В k-анонимизации участвуют только активные группы.")
+        ToolTip(self.types_button, "Показывает технические типы Pandas. Это не то же самое, что роли столбцов.")
+
         self.anonymize_button = ttk.Button(
             toolbar,
             text="Анонимизировать",
             command=self.anonymize_selected_operations,
             state="disabled",
         )
-        self.anonymize_button.pack(side="left", padx=(10, 7))
+        self.anonymize_button.pack(side="right", padx=(12, 0))
         ToolTip(
             self.anonymize_button,
-            "Запускает операции, выбранные в настройках суммарной анонимизации.",
+            "Создаёт новый CSV по выбранным операциям. Исходный файл не изменяется.",
         )
+
+        info_frame = ttk.Frame(content, style="App.TFrame")
+        info_frame.grid(row=1, column=0, sticky="ew", pady=(0, 4))
+        self.table_info = tk.StringVar(value="Таблица не загружена")
+        ttk.Label(
+            info_frame, textvariable=self.table_info, style="App.TLabel",
+            font=("Segoe UI", 10, "bold")
+        ).pack(anchor="w")
+        self.plan_info = tk.StringVar(value="План запуска: операции не выбраны")
+        plan_label = ttk.Label(
+            info_frame, textvariable=self.plan_info, style="App.TLabel", foreground="#526174"
+        )
+        plan_label.pack(anchor="w", pady=(3, 0))
+        ToolTip(
+            plan_label,
+            "CSV — основная таблица для аналитики. JSON — отдельный технический отчёт, он не нужен аналитическим алгоритмам. l-разнообразие только проверяет результат; при провале CSV не создаётся.",
+        )
+
+        guide = ttk.Label(
+            content,
+            text="Порядок работы: 1) назначьте роли столбцов; 2) проверьте группы QI; 3) выберите операции в настройках; 4) сохраните новый CSV.",
+            style="App.TLabel",
+            foreground="#667085",
+            wraplength=1050,
+        )
+        guide.grid(row=2, column=0, sticky="ew", pady=(2, 8))
+
         table_frame = ttk.Frame(content, style="App.TFrame")
-        table_frame.grid(row=1, column=0, sticky="nsew")
+        table_frame.grid(row=3, column=0, sticky="nsew")
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
@@ -354,23 +401,19 @@ class TableViewer(tk.Tk):
         )
 
         individual_state = "normal" if table_loaded else "disabled"
-        aggregate_state = (
-            "normal" if table_loaded and aggregate_selected else "disabled"
-        )
-        self.operations_menu.entryconfig(
-            self.tokenization_menu_index,
-            state=individual_state,
-        )
-        self.operations_menu.entryconfig(
-            self.removal_menu_index,
-            state=individual_state,
-        )
+        aggregate_state = "normal" if table_loaded and aggregate_selected else "disabled"
+        self.operations_menu.entryconfig(self.types_menu_index, state=individual_state)
+        self.operations_menu.entryconfig(self.classification_menu_index, state=individual_state)
+        self.types_button.configure(state=individual_state)
+        self.classification_button.configure(state=individual_state)
+        self.operations_menu.entryconfig(self.tokenization_menu_index, state=individual_state)
+        self.operations_menu.entryconfig(self.removal_menu_index, state=individual_state)
+
         qi_groups_enabled = self.settings.data_type_analysis.enable_multiple_quasi_identifier_groups
         qi_groups_state = "normal" if table_loaded and qi_groups_enabled else "disabled"
-        self.operations_menu.entryconfig(
-            self.quasi_identifier_groups_menu_index,
-            state=qi_groups_state,
-        )
+        self.operations_menu.entryconfig(self.quasi_identifier_groups_menu_index, state=qi_groups_state)
+        self.qi_groups_button.configure(state=qi_groups_state)
+
         active_qi_profiles = False
         if table_loaded:
             try:
@@ -383,6 +426,52 @@ class TableViewer(tk.Tk):
         k_state = "normal" if table_loaded and active_qi_profiles else "disabled"
         self.operations_menu.entryconfig(self.k_anonymization_menu_index, state=k_state)
         self.anonymize_button.configure(state=aggregate_state)
+        self._update_plan_summary()
+
+    def _update_plan_summary(self) -> None:
+        operations = []
+        anonymization = self.settings.anonymization
+        if anonymization.tokenize_direct_identifiers:
+            operations.append("токенизация идентификаторов")
+        if anonymization.remove_direct_identifiers:
+            operations.append("удаление идентификаторов")
+        if anonymization.enable_k_anonymity:
+            k_settings = self.settings.k_anonymization
+            operations.append(f"k-анонимизация (k={k_settings.default_k})")
+            if k_settings.enable_l_diversity:
+                variant_label = {
+                    "distinct": "Distinct",
+                    "entropy": "Entropy",
+                    "both": "оба критерия",
+                }.get(k_settings.l_diversity_variant, k_settings.l_diversity_variant)
+                operations.append(
+                    f"проверка l={k_settings.default_l} ({variant_label})"
+                )
+
+        if not operations:
+            self.plan_info.set("План запуска: операции не выбраны")
+            return
+
+        details = "План запуска: " + " + ".join(operations)
+        if (
+            anonymization.enable_k_anonymity
+            and self.settings.k_anonymization.enable_l_diversity
+        ):
+            sensitive = []
+            if self.current_file_path is not None:
+                try:
+                    roles = load_manual_role_overrides(self.current_file_path)
+                    sensitive = [
+                        name for name, assigned in roles.items()
+                        if "sensitive_attribute" in assigned
+                        and self.current_dataframe is not None
+                        and name in self.current_dataframe.columns
+                    ]
+                except (OSError, ValueError):
+                    sensitive = []
+            sensitive_text = ", ".join(sensitive) if sensitive else "не назначены"
+            details += f"  |  Конфиденциальные поля: {sensitive_text}"
+        self.plan_info.set(details)
 
     def run_k_anonymization(self) -> None:
         if self.current_dataframe is None or self.current_file_path is None:
@@ -391,7 +480,7 @@ class TableViewer(tk.Tk):
         default_k = self.settings.k_anonymization.default_k
         k_value = simpledialog.askinteger(
             "Параметры k-анонимизации",
-            "Общее значение k. Для отдельных QI-профилей может быть задано собственное значение:",
+            "Минимальный размер эквивалентной группы (k):",
             initialvalue=default_k,
             minvalue=2,
             parent=self,
@@ -400,7 +489,7 @@ class TableViewer(tk.Tk):
             return
         output_path = filedialog.asksaveasfilename(
             parent=self,
-            title="Сохранить k-анонимную таблицу",
+            title="Сохранить результирующую CSV-таблицу",
             defaultextension=".csv",
             initialfile=f"{self.current_file_path.stem}_k_anonymized.csv",
             filetypes=(("CSV-файлы", "*.csv"),),
@@ -409,16 +498,18 @@ class TableViewer(tk.Tk):
             return
         destination = Path(output_path).resolve()
         if destination == self.current_file_path.resolve():
-            messagebox.showerror("Недопустимый путь", "Нельзя сохранять результат поверх исходного CSV.", parent=self)
-            return
-        report_path = destination.with_name(destination.stem + "_k_report.json")
-        if destination.exists() or report_path.exists():
-            if not messagebox.askyesno(
-                "Перезапись файлов",
-                f"Файл результата или отчёта уже существует. Перезаписать?\n\n{destination}\n{report_path}",
+            messagebox.showerror(
+                "Недопустимый путь",
+                "Нельзя сохранять результат поверх исходного CSV.",
                 parent=self,
-            ):
-                return
+            )
+            return
+        if destination.exists() and not messagebox.askyesno(
+            "Перезапись CSV",
+            f"Файл уже существует:\n{destination}\n\nПерезаписать?",
+            parent=self,
+        ):
+            return
         try:
             result, report = execute_k_anonymization(
                 self.current_dataframe,
@@ -429,45 +520,107 @@ class TableViewer(tk.Tk):
                 default_l=self.settings.k_anonymization.default_l,
                 l_variant=self.settings.k_anonymization.l_diversity_variant,
             )
-            save_csv(result, destination)
-            save_k_anonymity_report(report, report_path)
         except LDiversityViolationError as error:
-            try:
-                save_k_anonymity_report(error.report, report_path)
-                details = f"\n\nДиагностический отчёт: {report_path}"
-            except OSError as report_error:
-                details = f"\n\nНе удалось сохранить отчёт: {report_error}"
+            report_path = self._save_l_failure_report(error.report, destination)
+            details = str(error)
+            if report_path is not None:
+                details += f"\n\nДиагностический отчёт сохранён: {report_path}"
+            else:
+                details += "\n\nCSV не создан. Диагностический отчёт не сохранён."
             messagebox.showerror(
-                "l-разнообразие не выполнено",
-                str(error) + details,
-                parent=self,
+                "Проверка l-разнообразия не пройдена", details, parent=self
             )
             return
         except (OSError, ValueError, RuntimeError) as error:
             messagebox.showerror("k-анонимизация не выполнена", str(error), parent=self)
             return
 
+        try:
+            save_csv(result, destination)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Ошибка сохранения CSV", str(error), parent=self)
+            return
+
+        report_path = self._offer_k_report(report, destination)
         self.status.set(f"k-анонимизация завершена. Результат: {destination.name}")
         profile_lines = [
             f"{item['group_name']}: k={item['required_k']}, минимум в классе={item['minimum_equivalence_class_size']}"
             for item in report["profiles"]
         ]
         l_status = report.get("l_diversity", {}).get("status")
-        l_message = (
-            f"\n\nПроверка l-разнообразия пройдена: l={report['l_diversity']['l']}, "
-            f"вариант={report['l_diversity']['variant']}, "
-            f"проверок={report['l_diversity']['check_count']}."
-            if l_status == "satisfied"
-            else "\n\nПроверка l-разнообразия не выполнялась."
+        if l_status == "satisfied":
+            l_message = (
+                f"\n\nПроверка l-разнообразия пройдена: "
+                f"l={report['l_diversity']['l']}, "
+                f"критерий={report['l_diversity']['variant']}."
+            )
+        else:
+            l_message = "\n\nПроверка l-разнообразия не выполнялась."
+        report_message = (
+            f"\n\nТехнический отчёт: {report_path}"
+            if report_path
+            else "\n\nJSON-отчёт не сохранялся. Он не нужен для загрузки CSV в аналитические алгоритмы."
         )
         messagebox.showinfo(
             "k-анонимизация завершена",
-            "Все активные QI-профили прошли проверку k-анонимности.\n\n"
+            "CSV-таблица создана.\n\n"
             + "\n".join(profile_lines)
             + l_message
-            + f"\n\nРезультат: {destination}\nОтчёт: {report_path}",
+            + f"\n\nРезультат CSV: {destination}"
+            + report_message,
             parent=self,
         )
+
+    def _offer_k_report(self, report: dict, csv_path: Path) -> Path | None:
+        should_save = messagebox.askyesno(
+            "Сохранить технический отчёт?",
+            "CSV — основная таблица для аналитики.\n"
+            "JSON — дополнительный отчёт с параметрами и метриками проверки; "
+            "аналитическим алгоритмам он не нужен.\n\n"
+            "Сохранить JSON рядом с CSV?",
+            parent=self,
+            default=messagebox.NO,
+        )
+        if not should_save:
+            return None
+        report_path = csv_path.with_name(csv_path.stem + "_k_report.json")
+        if report_path.exists() and not messagebox.askyesno(
+            "Перезапись отчёта",
+            f"Отчёт уже существует:\n{report_path}\n\nПерезаписать?",
+            parent=self,
+        ):
+            return None
+        try:
+            save_k_anonymity_report(report, report_path)
+        except (OSError, ValueError) as error:
+            messagebox.showwarning(
+                "CSV сохранён, отчёт не сохранён",
+                f"Результирующая CSV-таблица сохранена.\n\nНе удалось сохранить отчёт: {error}",
+                parent=self,
+            )
+            return None
+        return report_path
+
+    def _save_l_failure_report(self, report: dict, csv_destination: Path) -> Path | None:
+        report_path = csv_destination.with_name(
+            csv_destination.stem + "_l_diversity_failed_report.json"
+        )
+        if report_path.exists() and not messagebox.askyesno(
+            "Перезапись диагностического отчёта",
+            f"Отчёт уже существует:\n{report_path}\n\nПерезаписать?",
+            parent=self,
+        ):
+            return None
+        try:
+            save_k_anonymity_report(report, report_path)
+        except (OSError, ValueError) as error:
+            messagebox.showwarning(
+                "Не удалось сохранить отчёт",
+                f"CSV не создан. Причину смотри в сообщении об ошибке.\n\n{error}",
+                parent=self,
+            )
+            return None
+        return report_path
 
     def anonymize_selected_operations(self) -> None:
         selected_operations = []
@@ -516,7 +669,31 @@ class TableViewer(tk.Tk):
         aggregate: bool = False,
     ) -> None:
         if self.current_dataframe is None or self.current_file_path is None:
-            messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.")
+            messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.", parent=self)
+            return
+
+        output_path = filedialog.asksaveasfilename(
+            parent=self,
+            title=title,
+            defaultextension=".csv",
+            initialfile=f"{self.current_file_path.stem}{output_suffix}.csv",
+            filetypes=(("CSV-файлы", "*.csv"),),
+        )
+        if not output_path:
+            return
+        destination = Path(output_path).resolve()
+        if destination == self.current_file_path.resolve():
+            messagebox.showerror(
+                "Недопустимый путь",
+                "Нельзя сохранять результат поверх исходной таблицы.",
+                parent=self,
+            )
+            return
+        if destination.exists() and not messagebox.askyesno(
+            "Перезапись CSV",
+            f"Файл уже существует:\n{destination}\n\nПерезаписать?",
+            parent=self,
+        ):
             return
 
         try:
@@ -531,113 +708,63 @@ class TableViewer(tk.Tk):
                 l_variant=self.settings.k_anonymization.l_diversity_variant,
             )
         except LDiversityViolationError as error:
-            report_path = filedialog.asksaveasfilename(
-                parent=self,
-                title="Сохранить диагностический отчёт l-разнообразия",
-                defaultextension=".json",
-                initialfile=f"{self.current_file_path.stem}_l_diversity_failed_report.json",
-                filetypes=(("JSON-файлы", "*.json"),),
+            report_path = self._save_l_failure_report(error.report, destination)
+            details = str(error)
+            details += (
+                f"\n\nДиагностический JSON: {report_path}"
+                if report_path is not None
+                else "\n\nCSV не создан. Диагностический отчёт не сохранён."
             )
-            if report_path:
-                try:
-                    save_k_anonymity_report(error.report, report_path)
-                except OSError as report_error:
-                    messagebox.showerror("Ошибка сохранения отчёта", str(report_error), parent=self)
-                    return
             messagebox.showerror(
-                "l-разнообразие не выполнено",
-                str(error) + (f"\n\nОтчёт: {report_path}" if report_path else ""),
-                parent=self,
+                "Проверка l-разнообразия не пройдена", details, parent=self
             )
             return
         except (OSError, ValueError, RuntimeError) as error:
             messagebox.showerror(
-                "Невозможно выполнить операцию",
-                str(error),
-                parent=self,
+                "Невозможно выполнить операцию", str(error), parent=self
             )
-            return
-
-        output_path = filedialog.asksaveasfilename(
-            parent=self,
-            title=title,
-            defaultextension=".csv",
-            initialfile=f"{self.current_file_path.stem}{output_suffix}.csv",
-            filetypes=(("CSV-файлы", "*.csv"),),
-        )
-        if not output_path:
-            return
-
-        destination = Path(output_path).resolve()
-        if destination == self.current_file_path.resolve():
-            messagebox.showerror(
-                "Недопустимый путь",
-                "Нельзя сохранять результат поверх исходной таблицы.",
-                parent=self,
-            )
-            return
-        report_path = (
-            destination.with_name(destination.stem + "_k_report.json")
-            if execution.k_report is not None
-            else None
-        )
-        existing_paths = [destination]
-        if report_path is not None:
-            existing_paths.append(report_path)
-        existing_paths = [path for path in existing_paths if path.exists()]
-        if existing_paths and not messagebox.askyesno(
-            "Перезапись файлов",
-            "Следующие файлы уже существуют:\n"
-            + "\n".join(str(path) for path in existing_paths)
-            + "\nПерезаписать их?",
-            parent=self,
-        ):
             return
 
         try:
             save_csv(execution.dataframe, destination)
-            if report_path is not None and execution.k_report is not None:
-                save_k_anonymity_report(execution.k_report, report_path)
         except (OSError, ValueError) as error:
-            messagebox.showerror("Ошибка сохранения", str(error), parent=self)
+            messagebox.showerror("Ошибка сохранения CSV", str(error), parent=self)
             return
+
+        report_path = None
+        if execution.k_report is not None:
+            report_path = self._offer_k_report(execution.k_report, destination)
 
         operation_labels = {
             TOKENIZE_DIRECT_IDENTIFIERS: "токенизация прямых идентификаторов",
             REMOVE_DIRECT_IDENTIFIERS: "удаление прямых идентификаторов",
             K_ANONYMITY: "k-анонимизация",
         }
-        operations_text = ", ".join(
-            operation_labels[item] for item in execution.operations
-        )
+        operations_text = ", ".join(operation_labels[item] for item in execution.operations)
         affected_text = ", ".join(execution.affected_columns) or "нет"
         details = [
             f"Выполненные операции: {operations_text}",
             f"Обработанные столбцы: {affected_text}",
-            f"Результат сохранён: {destination}",
+            f"CSV для аналитики сохранён: {destination}",
         ]
-        if execution.k_report is not None and report_path is not None:
-            details.append(f"Отчёт k-анонимизации: {report_path}")
+        if execution.k_report is not None:
             l_report = execution.k_report.get("l_diversity", {})
             if l_report.get("status") == "satisfied":
                 details.append(
-                    f"l-разнообразие подтверждено: l={l_report['l']}, "
-                    f"вариант={l_report['variant']}, проверок={l_report['check_count']}"
+                    f"Проверка l-разнообразия пройдена: l={l_report['l']}, "
+                    f"критерий={l_report['variant']}"
                 )
+            if report_path is not None:
+                details.append(f"Технический отчёт JSON: {report_path}")
+            else:
+                details.append("JSON-отчёт не сохранялся; для работы с CSV он не нужен.")
         if TOKENIZE_DIRECT_IDENTIFIERS in execution.operations:
             details.append(
-                "Токенизация является псевдонимизацией и сама по себе "
-                "не гарантирует анонимность данных."
+                "Токенизация является псевдонимизацией и сама по себе не гарантирует анонимность данных."
             )
-        completion_title = (
-            "Суммарная анонимизация завершена" if aggregate else "Операция завершена"
-        )
+        completion_title = "Суммарная анонимизация завершена" if aggregate else "Операция завершена"
         self.status.set(f"{completion_title}: {operations_text}. Результат: {destination.name}")
-        messagebox.showinfo(
-            completion_title,
-            "\n\n".join(details),
-            parent=self,
-        )
+        messagebox.showinfo(completion_title, "\n\n".join(details), parent=self)
 
     def show_attribute_classification(self) -> None:
         if self.current_dataframe is None or self.current_file_path is None:
@@ -666,6 +793,7 @@ class TableViewer(tk.Tk):
                 messagebox.showerror("Ошибка сохранения ролей", str(error), parent=self)
                 return False
             self.status.set("Ручные назначения атрибутов сохранены.")
+            self._update_plan_summary()
             return True
 
         self.attribute_classification_window = AttributeClassificationWindow(

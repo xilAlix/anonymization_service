@@ -129,6 +129,7 @@ def _check_partition(
             "l": l_value,
             "variant": variant,
             "missing_context_count": missing_context_count,
+            "context_attributes": list(invalid_context_columns or []),
             **metrics,
         })
     return checks
@@ -248,6 +249,24 @@ def evaluate_l_diversity(
         })
 
     failures = [check for check in all_checks if not check["satisfied"]]
+    failed_by_scope: dict[str, int] = {}
+    for check in failures:
+        scope = check["scope"]
+        failed_by_scope[scope] = failed_by_scope.get(scope, 0) + 1
+    failure_examples = [
+        {
+            "profile_name": check["profile_name"],
+            "scope": check["scope"],
+            "target_attributes": check["target_attributes"],
+            "context_attributes": check.get("context_attributes", []),
+            "class_number": check["class_number"],
+            "row_count": check["row_count"],
+            "distinct_value_count": check["distinct_value_count"],
+            "entropy_nats": check["entropy_nats"],
+            "required_entropy_nats": check["required_entropy_nats"],
+        }
+        for check in failures[:10]
+    ]
     numeric_sensitive = [
         column for column in sensitive_attributes
         if pd.api.types.is_numeric_dtype(dataframe[column].dtype)
@@ -275,6 +294,8 @@ def evaluate_l_diversity(
         "profile_count": len(profile_summaries),
         "check_count": len(all_checks),
         "failed_check_count": len(failures),
+        "failed_by_scope": failed_by_scope,
+        "failure_examples": failure_examples,
         "profiles": profile_summaries,
         "checks": all_checks,
         "notes": notes,

@@ -21,22 +21,66 @@ from infrastructure.attribute_profile_store import (
 class LDiversityViolationError(RuntimeError):
     def __init__(self, report: dict[str, Any]):
         self.report = report
-        failures = [check for check in report.get("checks", []) if not check.get("satisfied")]
-        preview = []
-        for item in failures[:8]:
-            preview.append(
-                f"{item['profile_name']} / {', '.join(item['target_attributes'])} "
-                f"/ {item['scope']} / класс {item['class_number']}: "
-                f"различных значений {item['distinct_value_count']}, "
-                f"H={item['entropy_nats'] if item['entropy_nats'] is not None else 'нет данных'} "
-                f"(требуется l={item['l']})"
-            )
-        details = "\n".join(preview)
-        if len(failures) > len(preview):
-            details += f"\n... и ещё {len(failures) - len(preview)} нарушений."
-        super().__init__(
-            "l-разнообразие не выполнено. CSV-результат не сохранён.\n" + details
+        l_report = report.get("l_diversity", report)
+        failures = [
+            check for check in l_report.get("checks", [])
+            if not check.get("satisfied")
+        ]
+        failed_by_scope = l_report.get("failed_by_scope", {})
+        lines = [
+            "l-разнообразие не выполнено. CSV-результат не сохранён (CSV не создан).",
+            f"Нарушений: {len(failures)} из {l_report.get('check_count', len(failures))} проверок.",
+        ]
+
+        conditional = next(
+            (
+                item for item in failures
+                if item.get("scope") == "conditional_on_other_sensitive_attributes"
+            ),
+            None,
         )
+        if conditional is not None:
+            target = ", ".join(conditional.get("target_attributes", []))
+            context = ", ".join(conditional.get("context_attributes", [])) or "другие чувствительные поля"
+            lines.append(
+                f"Причина: поле «{target}» проверяется с учётом «{context}». "
+                f"В профиле «{conditional.get('profile_name', 'без названия')}» "
+                f"получилась группа из {conditional.get('row_count')} строки(строк)."
+            )
+            lines.append(
+                f"В группе найдено разных значений: {conditional.get('distinct_value_count')}; "
+                f"энтропия: {conditional.get('entropy_nats')}; "
+                f"порог при l={conditional.get('l')}: "
+                f"{conditional.get('required_entropy_nats')}."
+            )
+            lines.append(
+                "Такое часто происходит, когда дополнительное числовое поле почти уникально "
+                "(например, сумма покупки или доход). Сейчас такие поля сравниваются по точным значениям."
+            )
+        elif failures:
+            item = failures[0]
+            lines.append(
+                f"Первое нарушение: профиль «{item.get('profile_name', 'без названия')}», "
+                f"поле «{', '.join(item.get('target_attributes', []))}», "
+                f"класс {item.get('class_number')}, строк в классе: {item.get('row_count')}, "
+                f"разных значений: {item.get('distinct_value_count')}, "
+                f"H={item.get('entropy_nats')} при пороге {item.get('required_entropy_nats')}."
+            )
+
+        if failed_by_scope:
+            scope_labels = {
+                "individual": "отдельные поля",
+                "joint_tuple": "совместные комбинации",
+                "conditional_on_other_sensitive_attributes": "учёт остальных чувствительных полей",
+            }
+            breakdown = ", ".join(
+                f"{scope_labels.get(scope, scope)}: {count}"
+                for scope, count in failed_by_scope.items()
+            )
+            lines.append(f"Где возникли нарушения: {breakdown}.")
+
+        lines.append("Подробности сохранены в диагностическом JSON-отчёте.")
+        super().__init__("\n".join(lines))
 
 
 def execute_k_anonymization(
