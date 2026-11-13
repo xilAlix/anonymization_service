@@ -780,6 +780,25 @@ def run_cli(arguments: list[str]) -> int:
             print(f"Результат сохранён: {output_path}")
             if report_path is not None:
                 print(f"Подробный отчёт: {report_path}")
+            if execution.k_report is not None:
+                l_report = execution.k_report.get("l_diversity", {})
+                if l_report.get("status") == "satisfied":
+                    print(
+                        f"l-разнообразие пройдено: l={l_report['l']}, "
+                        f"критерий={l_report['variant']}."
+                    )
+                elif l_report.get("status") == "not_checked":
+                    print("l-разнообразие не проверялось: выключено в настройках.")
+            elif settings.k_anonymization.enable_l_diversity:
+                print(
+                    "l-разнообразие не проверялось: k-анонимизация не включена "
+                    "в суммарный запуск."
+                )
+            else:
+                print(
+                    "l-разнообразие не проверялось: k-анонимизация не запускалась, "
+                    "а l-проверка выключена в настройках."
+                )
             if TOKENIZE_DIRECT_IDENTIFIERS in execution.operations:
                 print(
                     "Важно: токенизация является псевдонимизацией и сама по себе "

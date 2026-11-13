@@ -172,37 +172,13 @@ class TableViewer(tk.Tk):
 
         toolbar = ttk.Frame(content, style="App.TFrame")
         toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        self.open_button = ttk.Button(toolbar, text="Открыть CSV", command=self.open_csv)
-        self.open_button.pack(side="left", padx=(0, 5))
-        self.example_button = ttk.Button(toolbar, text="Пример", command=self.open_example)
-        self.example_button.pack(side="left", padx=5)
-        self.types_button = ttk.Button(
-            toolbar, text="Типы данных", command=self.show_column_types, state="disabled"
-        )
-        self.types_button.pack(side="left", padx=5)
-        self.classification_button = ttk.Button(
-            toolbar, text="Роли столбцов", command=self.show_attribute_classification,
-            state="disabled"
-        )
-        self.classification_button.pack(side="left", padx=5)
-        self.qi_groups_button = ttk.Button(
-            toolbar, text="Группы QI", command=self.show_quasi_identifier_groups,
-            state="disabled"
-        )
-        self.qi_groups_button.pack(side="left", padx=5)
-        self.settings_button = ttk.Button(toolbar, text="Настройки", command=self.open_settings)
-        self.settings_button.pack(side="left", padx=5)
-        ToolTip(self.classification_button, "Назначьте столбцам роли: идентификатор, квази-идентификатор, конфиденциальный или аналитический атрибут.")
-        ToolTip(self.qi_groups_button, "Проверьте, какие сочетания столбцов могут быть известны внешнему источнику. В k-анонимизации участвуют только активные группы.")
-        ToolTip(self.types_button, "Показывает технические типы Pandas. Это не то же самое, что роли столбцов.")
-
         self.anonymize_button = ttk.Button(
             toolbar,
             text="Анонимизировать",
             command=self.anonymize_selected_operations,
             state="disabled",
         )
-        self.anonymize_button.pack(side="right", padx=(12, 0))
+        self.anonymize_button.pack(side="right")
         ToolTip(
             self.anonymize_button,
             "Создаёт новый CSV по выбранным операциям. Исходный файл не изменяется.",
@@ -227,7 +203,7 @@ class TableViewer(tk.Tk):
 
         guide = ttk.Label(
             content,
-            text="Порядок работы: 1) назначьте роли столбцов; 2) проверьте группы QI; 3) выберите операции в настройках; 4) сохраните новый CSV.",
+            text="Работа с таблицей и настройками доступна в меню сверху. После проверки ролей и QI-групп запустите выбранные операции кнопкой «Анонимизировать».",
             style="App.TLabel",
             foreground="#667085",
             wraplength=1050,
@@ -401,18 +377,13 @@ class TableViewer(tk.Tk):
         )
 
         individual_state = "normal" if table_loaded else "disabled"
-        aggregate_state = "normal" if table_loaded and aggregate_selected else "disabled"
         self.operations_menu.entryconfig(self.types_menu_index, state=individual_state)
         self.operations_menu.entryconfig(self.classification_menu_index, state=individual_state)
-        self.types_button.configure(state=individual_state)
-        self.classification_button.configure(state=individual_state)
         self.operations_menu.entryconfig(self.tokenization_menu_index, state=individual_state)
         self.operations_menu.entryconfig(self.removal_menu_index, state=individual_state)
 
-        qi_groups_enabled = self.settings.data_type_analysis.enable_multiple_quasi_identifier_groups
-        qi_groups_state = "normal" if table_loaded and qi_groups_enabled else "disabled"
+        qi_groups_state = "normal" if table_loaded else "disabled"
         self.operations_menu.entryconfig(self.quasi_identifier_groups_menu_index, state=qi_groups_state)
-        self.qi_groups_button.configure(state=qi_groups_state)
 
         active_qi_profiles = False
         if table_loaded:
@@ -425,38 +396,69 @@ class TableViewer(tk.Tk):
                 active_qi_profiles = False
         k_state = "normal" if table_loaded and active_qi_profiles else "disabled"
         self.operations_menu.entryconfig(self.k_anonymization_menu_index, state=k_state)
-        self.anonymize_button.configure(state=aggregate_state)
-        self._update_plan_summary()
 
-    def _update_plan_summary(self) -> None:
+        aggregate_ready = table_loaded and aggregate_selected
+        if self.settings.anonymization.enable_k_anonymity and not active_qi_profiles:
+            aggregate_ready = False
+        self.anonymize_button.configure(state="normal" if aggregate_ready else "disabled")
+        self._update_plan_summary(active_qi_profiles=active_qi_profiles)
+
+    def _update_plan_summary(self, active_qi_profiles: bool | None = None) -> None:
         operations = []
         anonymization = self.settings.anonymization
+        k_settings = self.settings.k_anonymization
         if anonymization.tokenize_direct_identifiers:
             operations.append("токенизация идентификаторов")
         if anonymization.remove_direct_identifiers:
             operations.append("удаление идентификаторов")
         if anonymization.enable_k_anonymity:
-            k_settings = self.settings.k_anonymization
             operations.append(f"k-анонимизация (k={k_settings.default_k})")
-            if k_settings.enable_l_diversity:
-                variant_label = {
-                    "distinct": "Distinct",
-                    "entropy": "Entropy",
-                    "both": "оба критерия",
-                }.get(k_settings.l_diversity_variant, k_settings.l_diversity_variant)
-                operations.append(
-                    f"проверка l={k_settings.default_l} ({variant_label})"
-                )
+
+        if active_qi_profiles is None:
+            active_qi_profiles = False
+            if self.current_file_path is not None:
+                try:
+                    active_qi_profiles = any(
+                        group.get("active", group.get("source") != "automatic")
+                        for group in load_quasi_identifier_groups(self.current_file_path)
+                    )
+                except (OSError, ValueError):
+                    active_qi_profiles = False
 
         if not operations:
-            self.plan_info.set("План запуска: операции не выбраны")
-            return
+            summary = "План запуска: операции не выбраны"
+        else:
+            summary = "План запуска: " + " + ".join(operations)
 
-        details = "План запуска: " + " + ".join(operations)
-        if (
-            anonymization.enable_k_anonymity
-            and self.settings.k_anonymization.enable_l_diversity
-        ):
+        if not k_settings.enable_l_diversity:
+            l_summary = "l-проверка: выключена"
+        else:
+            variant_label = {
+                "distinct": "Distinct",
+                "entropy": "Entropy",
+                "both": "оба критерия",
+            }.get(k_settings.l_diversity_variant, k_settings.l_diversity_variant)
+            l_summary = f"l-проверка: включена (l={k_settings.default_l}, {variant_label})"
+            if anonymization.enable_k_anonymity:
+                l_summary += " и войдёт в суммарный запуск"
+            else:
+                l_summary += (
+                    "; в суммарный запуск не входит, поскольку k-анонимизация не выбрана. "
+                    "Применится при отдельном запуске k-анонимизации через меню «Операции»"
+                )
+
+        details = f"{summary}  |  {l_summary}"
+        if anonymization.enable_k_anonymity and not active_qi_profiles:
+            details += (
+                "  |  Нет активных QI-групп - откройте «Операции» → «Группы QI» "
+                "и подтвердите или создайте группу"
+            )
+        elif k_settings.enable_l_diversity and not active_qi_profiles:
+            details += (
+                "  |  Нет активных QI-групп - l нельзя проверить до подтверждения группы"
+            )
+
+        if k_settings.enable_l_diversity:
             sensitive = []
             if self.current_file_path is not None:
                 try:
@@ -554,8 +556,13 @@ class TableViewer(tk.Tk):
                 f"l={report['l_diversity']['l']}, "
                 f"критерий={report['l_diversity']['variant']}."
             )
+        elif l_status == "not_checked":
+            l_message = (
+                "\n\nПроверка l-разнообразия не выполнялась: "
+                "выключена в настройках."
+            )
         else:
-            l_message = "\n\nПроверка l-разнообразия не выполнялась."
+            l_message = "\n\nСтатус l-проверки отсутствует в отчёте."
         report_message = (
             f"\n\nТехнический отчёт: {report_path}"
             if report_path
@@ -639,6 +646,39 @@ class TableViewer(tk.Tk):
                 parent=self,
             )
             return
+
+        if (
+            self.settings.k_anonymization.enable_l_diversity
+            and K_ANONYMITY not in selected_operations
+        ):
+            proceed = messagebox.askyesno(
+                "l-проверка не будет выполнена",
+                "l-разнообразие включено в настройках, но k-анонимизация "
+                "не выбрана для суммарного запуска. Поэтому l-проверка сейчас "
+                "не выполнится. Продолжить выбранные операции без неё?",
+                parent=self,
+            )
+            if not proceed:
+                return
+
+        if K_ANONYMITY in selected_operations:
+            try:
+                active_qi_profiles = [
+                    group for group in load_quasi_identifier_groups(self.current_file_path)
+                    if group.get("active", group.get("source") != "automatic")
+                ]
+            except (OSError, ValueError) as error:
+                messagebox.showerror("Ошибка QI-профилей", str(error), parent=self)
+                return
+            if not active_qi_profiles:
+                messagebox.showerror(
+                    "Нет активных QI-групп",
+                    "k-анонимизация и l-проверка не будут выполнены. "
+                    "Откройте меню «Операции» → «Группы квази-идентификаторов...», "
+                    "подтвердите хотя бы одну группу и повторите запуск.",
+                    parent=self,
+                )
+                return
 
         self._execute_anonymization(
             selected_operations,
@@ -754,10 +794,25 @@ class TableViewer(tk.Tk):
                     f"Проверка l-разнообразия пройдена: l={l_report['l']}, "
                     f"критерий={l_report['variant']}"
                 )
+            elif l_report.get("status") == "not_checked":
+                details.append(
+                    "Проверка l-разнообразия не выполнялась: выключена в настройках."
+                )
             if report_path is not None:
                 details.append(f"Технический отчёт JSON: {report_path}")
             else:
                 details.append("JSON-отчёт не сохранялся; для работы с CSV он не нужен.")
+        else:
+            if self.settings.k_anonymization.enable_l_diversity:
+                details.append(
+                    "Проверка l-разнообразия не выполнялась: k-анонимизация не входила "
+                    "в выбранные операции."
+                )
+            else:
+                details.append(
+                    "Проверка l-разнообразия не выполнялась: k-анонимизация не запускалась, "
+                    "а l-проверка выключена в настройках."
+                )
         if TOKENIZE_DIRECT_IDENTIFIERS in execution.operations:
             details.append(
                 "Токенизация является псевдонимизацией и сама по себе не гарантирует анонимность данных."
@@ -824,13 +879,6 @@ class TableViewer(tk.Tk):
         if self.current_dataframe is None or self.current_file_path is None:
             messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.")
             return
-        if not self.settings.data_type_analysis.enable_multiple_quasi_identifier_groups:
-            messagebox.showinfo(
-                "Режим выключен",
-                "Включи режим множественных групп QI в настройках анализа.",
-                parent=self,
-            )
-            return
         if (
             self.quasi_identifier_groups_window is not None
             and self.quasi_identifier_groups_window.winfo_exists()
@@ -840,7 +888,10 @@ class TableViewer(tk.Tk):
 
         try:
             groups = load_quasi_identifier_groups(self.current_file_path)
-            if not groups:
+            if (
+                not groups
+                and self.settings.data_type_analysis.enable_multiple_quasi_identifier_groups
+            ):
                 self._refresh_automatic_quasi_identifier_groups()
                 groups = load_quasi_identifier_groups(self.current_file_path)
         except (OSError, ValueError) as error:

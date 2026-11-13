@@ -157,7 +157,7 @@ class SettingsWindow(tk.Toplevel):
         qi_groups_check.pack(anchor="w", pady=(10, 0))
         ttk.Label(
             container,
-            text="Создаёт черновые группы внешней фоновой информации; проверьте и подтвердите их вручную.",
+            text="Автоматически предлагает черновые группы. Редактор QI доступен в меню «Операции» и для ручного создания групп.",
             style="Settings.Hint.TLabel",
             wraplength=680,
         ).pack(anchor="w", padx=(24, 0), pady=(2, 0))
@@ -194,7 +194,7 @@ class SettingsWindow(tk.Toplevel):
         )
         ttk.Label(
             self.threshold_frame,
-            text="Сравнивает долю уникальных значений; не определяет смысл столбца.",
+            text="Считает уникальные значения; не определяет смысл столбца.",
             style="Settings.Hint.TLabel",
             wraplength=650,
         ).pack(side="bottom", anchor="w", pady=(3, 0))
@@ -366,7 +366,7 @@ class SettingsWindow(tk.Toplevel):
 
         self.l_diversity_check = ttk.Checkbutton(
             k_frame,
-            text="Проверять l-разнообразие после k-анонимизации",
+            text="Проверять l-разнообразие при запуске k-анонимизации",
             variable=self.enable_l_diversity,
             command=self._toggle_l_controls,
         )
@@ -375,13 +375,13 @@ class SettingsWindow(tk.Toplevel):
         )
         ttk.Label(
             k_frame,
-            text="l только проверяет результат. При успехе сохраняется CSV; JSON можно сохранить отдельно. При провале CSV не создаётся.",
+            text="l не изменяет таблицу. Проверка выполняется только вместе с k. Если k не включена в суммарный запуск, l сработает при отдельном запуске k через меню «Операции».",
             style="Settings.Hint.TLabel",
             wraplength=650,
         ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(2, 0))
         ToolTip(
             self.l_diversity_check,
-            "Проверяет вручную назначенные конфиденциальные поля после k-анонимизации. Если проверка не пройдёт, CSV не сохраняется; рядом будет диагностический JSON с причиной.",
+            "Проверяет вручную назначенные конфиденциальные поля после k-анонимизации. Не выполняет преобразований. Если проверка не пройдёт, CSV не сохраняется; рядом будет диагностический JSON с причиной.",
         )
 
         tk.Label(
@@ -403,7 +403,7 @@ class SettingsWindow(tk.Toplevel):
         )
         l_value_hint = ttk.Label(
             k_frame,
-            text="Минимум разных чувствительных значений внутри каждой группы.",
+            text="Порог разнообразия в каждой эквивалентной группе. Если l выше возможного разнообразия, запуск завершится отказом.",
             style="Settings.Hint.TLabel",
             wraplength=650,
         )
