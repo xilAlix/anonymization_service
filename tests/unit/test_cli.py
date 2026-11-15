@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import unittest
@@ -13,6 +14,17 @@ if str(SRC_DIRECTORY) not in sys.path:
     sys.path.insert(0, str(SRC_DIRECTORY))
 
 from application import cli
+from infrastructure.attribute_profile_store import (
+    new_manual_quasi_identifier_group,
+    save_manual_role_overrides,
+    save_quasi_identifier_groups,
+)
+from infrastructure.settings_manager import (
+    AnonymizationSettings,
+    AppSettings,
+    KAnonymizationSettings,
+    save_settings,
+)
 
 
 class CliTests(unittest.TestCase):
@@ -116,6 +128,109 @@ class CliTests(unittest.TestCase):
             ])
         self.assertEqual(code, 2)
         self.assertIn("не должен совпадать", output.getvalue())
+
+
+    def test_k_anonymize_aborts_without_csv_when_l_diversity_fails(self):
+        dataframe = pd.DataFrame({
+            "qi": ["same"] * 4,
+            "sensitive": ["same-value"] * 4,
+        })
+        dataframe.to_csv(self.csv_path, index=False)
+        group = new_manual_quasi_identifier_group("Тестовый QI", ["qi"])
+        save_quasi_identifier_groups(
+            self.csv_path, [group], list(dataframe.columns), self.profile_path
+        )
+        save_manual_role_overrides(
+            self.csv_path,
+            {"sensitive": ["sensitive_attribute"]},
+            self.profile_path,
+        )
+        output_path = self.root / "result.csv"
+        report_path = self.root / "failure.json"
+        error_output = StringIO()
+        with redirect_stderr(error_output):
+            code = cli.run_cli([
+                "k-anonymize", str(self.csv_path), str(output_path),
+                "--k", "2", "--l-diversity", "--l", "2",
+                "--report-json", str(report_path),
+            ])
+        self.assertEqual(code, 2)
+        self.assertFalse(output_path.exists())
+        self.assertTrue(report_path.exists())
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(report["status"], "l_diversity_failed")
+        self.assertIn("CSV-результат не сохранён", error_output.getvalue())
+
+    def test_evaluate_l_diversity_uses_profile_source_for_external_output(self):
+        dataframe = pd.DataFrame({
+            "qi": ["same"] * 4,
+            "sensitive": ["a", "a", "b", "b"],
+        })
+        dataframe.to_csv(self.csv_path, index=False)
+        group = new_manual_quasi_identifier_group("Тестовый QI", ["qi"])
+        save_quasi_identifier_groups(
+            self.csv_path, [group], list(dataframe.columns), self.profile_path
+        )
+        save_manual_role_overrides(
+            self.csv_path,
+            {"sensitive": ["sensitive_attribute"]},
+            self.profile_path,
+        )
+        anonymized_path = self.root / "anonymized.csv"
+        dataframe.to_csv(anonymized_path, index=False)
+        output = StringIO()
+        with redirect_stdout(output):
+            code = cli.run_cli([
+                "evaluate-l-diversity", str(anonymized_path),
+                "--profile-source", str(self.csv_path), "--l", "2",
+            ])
+        self.assertEqual(code, 0)
+        self.assertIn("статус=satisfied", output.getvalue())
+
+
+    def test_anonymize_selected_aborts_without_csv_when_l_diversity_fails(self):
+        dataframe = pd.DataFrame({
+            "qi": ["same"] * 4,
+            "sensitive": ["private-value"] * 4,
+        })
+        dataframe.to_csv(self.csv_path, index=False)
+        group = new_manual_quasi_identifier_group("Тестовый QI", ["qi"])
+        save_quasi_identifier_groups(
+            self.csv_path, [group], list(dataframe.columns), self.profile_path
+        )
+        save_manual_role_overrides(
+            self.csv_path,
+            {"sensitive": ["sensitive_attribute"]},
+            self.profile_path,
+        )
+        save_settings(
+            AppSettings(
+                anonymization=AnonymizationSettings(
+                    tokenize_direct_identifiers=False,
+                    remove_direct_identifiers=False,
+                    enable_k_anonymity=True,
+                ),
+                k_anonymization=KAnonymizationSettings(
+                    default_k=2,
+                    enable_l_diversity=True,
+                    default_l=2,
+                    l_diversity_variant="both",
+                ),
+            ),
+            cli.SETTINGS_PATH,
+        )
+        output_path = self.root / "selected.csv"
+        error_output = StringIO()
+        with redirect_stderr(error_output):
+            code = cli.run_cli([
+                "anonymize-selected", str(self.csv_path), str(output_path)
+            ])
+        self.assertEqual(code, 2)
+        self.assertFalse(output_path.exists())
+        failure_report = self.root / "selected_l_diversity_failed_report.json"
+        self.assertTrue(failure_report.exists())
+        payload = failure_report.read_text(encoding="utf-8")
+        self.assertNotIn("private-value", payload)
 
 
 if __name__ == "__main__":

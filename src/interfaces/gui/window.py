@@ -26,6 +26,9 @@ from infrastructure.attribute_profile_store import (
 )
 from data_processing.schema_inspector import analyze_column_types
 from infrastructure.settings_manager import AppSettings, load_settings
+from application.analysis_workflow import run_analysis, export_analysis_results
+from interfaces.gui.analysis_results_view import AnalysisResultsView, DataFrameTable, DateColumnDialog
+from data_analysis.descriptive_statistics import inspect_date_columns
 from interfaces.gui.attribute_classification_window import AttributeClassificationWindow
 from interfaces.gui.column_types_window import ColumnTypesWindow
 from interfaces.gui.settings_window import SettingsWindow
@@ -68,6 +71,11 @@ class TableViewer(tk.Tk):
     def __init__(self, example_path: Path):
         super().__init__()
         self.example_path = example_path
+        self.short_example_path = Path(__file__).resolve().parents[3] / "data" / "synthetic" / "analysis_example_30.csv"
+        self.manual_date_formats: dict[str, str] = {}
+        self.result_tab: ttk.Frame | None = None
+        self.analysis_tab: ttk.Frame | None = None
+        self.analysis_results = None
         self.current_dataframe: pd.DataFrame | None = None
         self.current_file_path: Path | None = None
         self.preview_limit = 500
@@ -91,51 +99,65 @@ class TableViewer(tk.Tk):
 
         operations_menu = tk.Menu(menu_bar, tearoff=False)
         operations_menu.add_command(label="Открыть CSV-файл...", command=self.open_csv)
+        operations_menu.add_command(label="Загрузить пример (100 строк)", command=self.open_example)
         operations_menu.add_command(
-            label="Загрузить пример",
-            command=self.open_example,
+            label="Загрузить короткий пример (30 строк)",
+            command=self.open_short_example,
         )
+        operations_menu.add_separator()
+        operations_menu.add_command(
+            label="Анализ текущей таблицы",
+            command=self.analyze_current_table,
+            state="disabled",
+        )
+        self.analysis_menu_index = 4
+        operations_menu.add_command(
+            label="Назначить столбцы дат...",
+            command=self.configure_date_columns,
+            state="disabled",
+        )
+        self.date_menu_index = 5
         operations_menu.add_separator()
         operations_menu.add_command(
             label="Определить типы данных",
             command=self.show_column_types,
             state="disabled",
         )
-        self.operations_menu = operations_menu
-        self.types_menu_index = 3
+        self.types_menu_index = 7
         operations_menu.add_command(
             label="Классифицировать атрибуты",
             command=self.show_attribute_classification,
             state="disabled",
         )
-        self.classification_menu_index = 4
+        self.classification_menu_index = 8
         operations_menu.add_command(
             label="Группы квази-идентификаторов...",
             command=self.show_quasi_identifier_groups,
             state="disabled",
         )
-        self.quasi_identifier_groups_menu_index = 5
+        self.quasi_identifier_groups_menu_index = 9
         operations_menu.add_separator()
         operations_menu.add_command(
             label="Токенизировать прямые идентификаторы...",
             command=self.tokenize_direct_identifiers,
             state="disabled",
         )
-        self.tokenization_menu_index = 7
+        self.tokenization_menu_index = 11
         operations_menu.add_command(
             label="Удалить столбцы с прямыми идентификаторами...",
             command=self.remove_direct_identifiers,
             state="disabled",
         )
-        self.removal_menu_index = 8
+        self.removal_menu_index = 12
         operations_menu.add_separator()
         operations_menu.add_command(
             label="Выполнить k-анонимизацию...",
             command=self.run_k_anonymization,
             state="disabled",
         )
-        self.k_anonymization_menu_index = 10
+        self.k_anonymization_menu_index = 14
         menu_bar.add_cascade(label="Операции", menu=operations_menu)
+        self.operations_menu = operations_menu
         self.config(menu=menu_bar)
 
     def _build_widgets(self) -> None:
@@ -164,7 +186,6 @@ class TableViewer(tk.Tk):
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
-
         content = ttk.Frame(self, padding=(12, 10), style="App.TFrame")
         content.grid(row=0, column=0, sticky="nsew")
         content.columnconfigure(0, weight=1)
@@ -179,6 +200,17 @@ class TableViewer(tk.Tk):
             state="disabled",
         )
         self.anonymize_button.pack(side="right")
+        self.analyze_button = ttk.Button(
+            toolbar,
+            text="Анализ",
+            command=self.analyze_current_table,
+            state="disabled",
+        )
+        self.analyze_button.pack(side="right", padx=(0, 8))
+        ToolTip(
+            self.analyze_button,
+            "Рассчитывает описательную статистику и корреляции исходной таблицы. Данные не изменяются.",
+        )
         ToolTip(
             self.anonymize_button,
             "Создаёт новый CSV по выбранным операциям. Исходный файл не изменяется.",
@@ -188,30 +220,35 @@ class TableViewer(tk.Tk):
         info_frame.grid(row=1, column=0, sticky="ew", pady=(0, 4))
         self.table_info = tk.StringVar(value="Таблица не загружена")
         ttk.Label(
-            info_frame, textvariable=self.table_info, style="App.TLabel",
-            font=("Segoe UI", 10, "bold")
+            info_frame,
+            textvariable=self.table_info,
+            style="App.TLabel",
+            font=("Segoe UI", 10, "bold"),
         ).pack(anchor="w")
-        self.plan_info = tk.StringVar(value="План запуска: операции не выбраны")
-        plan_label = ttk.Label(
-            info_frame, textvariable=self.plan_info, style="App.TLabel", foreground="#526174"
-        )
-        plan_label.pack(anchor="w", pady=(3, 0))
-        ToolTip(
-            plan_label,
-            "CSV — основная таблица для аналитики. JSON — отдельный технический отчёт, он не нужен аналитическим алгоритмам. l-разнообразие только проверяет результат; при провале CSV не создаётся.",
-        )
+        self.plan_info = tk.StringVar(value="Работа с таблицей доступна через меню «Операции».")
+        ttk.Label(
+            info_frame,
+            textvariable=self.plan_info,
+            style="App.TLabel",
+            foreground="#526174",
+            wraplength=1100,
+        ).pack(anchor="w", pady=(3, 0))
 
         guide = ttk.Label(
             content,
-            text="Работа с таблицей и настройками доступна в меню сверху. После проверки ролей и QI-групп запустите выбранные операции кнопкой «Анонимизировать».",
+            text="Откройте таблицу, затем выберите «Анализ» или «Анонимизировать». Просмотр результатов открывается в отдельных вкладках.",
             style="App.TLabel",
             foreground="#667085",
-            wraplength=1050,
+            wraplength=1100,
         )
         guide.grid(row=2, column=0, sticky="ew", pady=(2, 8))
 
-        table_frame = ttk.Frame(content, style="App.TFrame")
-        table_frame.grid(row=3, column=0, sticky="nsew")
+        self.workspace = ttk.Notebook(content)
+        self.workspace.grid(row=3, column=0, sticky="nsew")
+        self.source_tab = ttk.Frame(self.workspace)
+        self.workspace.add(self.source_tab, text="Исходная таблица")
+        table_frame = ttk.Frame(self.source_tab, style="App.TFrame", padding=4)
+        table_frame.pack(fill="both", expand=True)
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
@@ -219,22 +256,13 @@ class TableViewer(tk.Tk):
         self.table.tag_configure("row_even", background="#FFFFFF")
         self.table.tag_configure("row_odd", background="#F1F5F9")
         vertical_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.table.yview)
-        horizontal_scroll = ttk.Scrollbar(
-            table_frame,
-            orient="horizontal",
-            command=self.table.xview,
-        )
-        self.table.configure(
-            yscrollcommand=vertical_scroll.set,
-            xscrollcommand=horizontal_scroll.set,
-        )
+        horizontal_scroll = ttk.Scrollbar(table_frame, orient="horizontal", command=self.table.xview)
+        self.table.configure(yscrollcommand=vertical_scroll.set, xscrollcommand=horizontal_scroll.set)
         self.table.grid(row=0, column=0, sticky="nsew")
         vertical_scroll.grid(row=0, column=1, sticky="ns")
         horizontal_scroll.grid(row=1, column=0, sticky="ew")
 
-        self.status = tk.StringVar(
-            value="Откройте CSV-файл или загрузите пример."
-        )
+        self.status = tk.StringVar(value="Откройте CSV-файл или загрузите пример.")
         ttk.Label(
             self,
             textvariable=self.status,
@@ -242,6 +270,57 @@ class TableViewer(tk.Tk):
             anchor="w",
             padding=(8, 4),
         ).grid(row=1, column=0, sticky="ew")
+
+    def _populate_dataframe_table(self, tree: ttk.Treeview, dataframe: pd.DataFrame) -> None:
+        columns = [str(column) for column in dataframe.columns]
+        tree.delete(*tree.get_children())
+        tree.configure(columns=columns)
+        for column in columns:
+            tree.heading(column, text=column)
+            tree.column(column, width=150, minwidth=90, anchor="w", stretch=True)
+        for row_number, row in enumerate(dataframe.head(self.preview_limit).itertuples(index=False, name=None)):
+            values = ["" if pd.isna(value) else str(value) for value in row]
+            row_style = "row_even" if row_number % 2 == 0 else "row_odd"
+            tree.insert("", "end", values=values, tags=(row_style,))
+
+    def _clear_derived_tabs(self) -> None:
+        for attribute in ("result_tab", "analysis_tab"):
+            tab = getattr(self, attribute, None)
+            if tab is not None:
+                try:
+                    self.workspace.forget(tab)
+                    tab.destroy()
+                except tk.TclError:
+                    pass
+                setattr(self, attribute, None)
+        self.analysis_results = None
+
+    def _show_anonymized_result(self, dataframe: pd.DataFrame, destination: Path) -> None:
+        if self.result_tab is None or not self.result_tab.winfo_exists():
+            self.result_tab = ttk.Frame(self.workspace)
+            self.workspace.add(self.result_tab, text="Результат анонимизации")
+        else:
+            for child in self.result_tab.winfo_children():
+                child.destroy()
+        ttk.Label(
+            self.result_tab,
+            text=f"{destination.name}  |  {len(dataframe)} строк × {len(dataframe.columns)} столбцов",
+            padding=(6, 6),
+        ).pack(anchor="w")
+        DataFrameTable(self.result_tab, dataframe, include_index=False).pack(fill="both", expand=True)
+        self.workspace.tab(self.result_tab, text="Результат анонимизации")
+        self.workspace.select(self.result_tab)
+
+    def _show_analysis_results(self, results, source_path: Path) -> None:
+        if self.analysis_tab is None or not self.analysis_tab.winfo_exists():
+            self.analysis_tab = ttk.Frame(self.workspace)
+            self.workspace.add(self.analysis_tab, text="Анализ")
+        else:
+            for child in self.analysis_tab.winfo_children():
+                child.destroy()
+        AnalysisResultsView(self.analysis_tab, results, source_path.name).pack(fill="both", expand=True)
+        self.workspace.tab(self.analysis_tab, text="Анализ")
+        self.workspace.select(self.analysis_tab)
 
     def _show_dataframe(self, dataframe: pd.DataFrame, source_path: Path) -> None:
         if (
@@ -260,27 +339,16 @@ class TableViewer(tk.Tk):
         ):
             self.quasi_identifier_groups_window.destroy()
 
-        self.current_dataframe = dataframe
+        self._clear_derived_tabs()
+        self.manual_date_formats = {}
+        self.current_dataframe = dataframe.copy(deep=True)
         self.current_file_path = source_path.resolve()
-        columns = [str(column) for column in dataframe.columns]
-        self.table.delete(*self.table.get_children())
-        self.table.configure(columns=columns)
-
-        for column in columns:
-            self.table.heading(column, text=column)
-            self.table.column(column, width=150, minwidth=90, anchor="w", stretch=True)
-
-        preview_rows = dataframe.head(self.preview_limit).itertuples(
-            index=False,
-            name=None,
-        )
-        for row_number, row in enumerate(preview_rows):
-            values = ["" if pd.isna(value) else str(value) for value in row]
-            row_style = "row_even" if row_number % 2 == 0 else "row_odd"
-            self.table.insert("", "end", values=values, tags=(row_style,))
+        self._populate_dataframe_table(self.table, dataframe)
 
         self.operations_menu.entryconfig(self.types_menu_index, state="normal")
         self.operations_menu.entryconfig(self.classification_menu_index, state="normal")
+        self.operations_menu.entryconfig(self.analysis_menu_index, state="normal")
+        self.operations_menu.entryconfig(self.date_menu_index, state="normal")
         self._update_anonymization_controls()
         row_count, column_count = dataframe.shape
         self.table_info.set(
@@ -315,6 +383,113 @@ class TableViewer(tk.Tk):
             self._show_dataframe(dataframe, self.example_path)
         except (OSError, ValueError, pd.errors.ParserError) as error:
             messagebox.showerror("Ошибка открытия примера", str(error))
+
+    def open_short_example(self) -> None:
+        try:
+            dataframe = load_csv(self.short_example_path)
+            self._show_dataframe(dataframe, self.short_example_path)
+        except (OSError, ValueError, pd.errors.ParserError) as error:
+            messagebox.showerror("Ошибка открытия короткого примера", str(error), parent=self)
+
+    def configure_date_columns(self) -> None:
+        if self.current_dataframe is None:
+            messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.", parent=self)
+            return
+        dialog = DateColumnDialog(self, self.current_dataframe, self.manual_date_formats)
+        self.wait_window(dialog)
+        if dialog.result is not None:
+            self.manual_date_formats = dialog.result
+            if self.manual_date_formats:
+                self.status.set(
+                    "Ручные форматы дат сохранены для текущей таблицы: "
+                    + ", ".join(self.manual_date_formats)
+                )
+            else:
+                self.status.set("Ручные назначения дат очищены; будет использовано автоопределение.")
+
+    def analyze_current_table(self) -> None:
+        if self.current_dataframe is None or self.current_file_path is None:
+            messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.", parent=self)
+            return
+
+        diagnostics = inspect_date_columns(self.current_dataframe)
+        ambiguous = [
+            column for column, info in diagnostics.items()
+            if info.get("ambiguous") and column not in self.manual_date_formats
+        ]
+        if ambiguous:
+            messagebox.showwarning(
+                "Неоднозначный формат даты",
+                "Не удалось безопасно определить формат следующих столбцов: "
+                + ", ".join(ambiguous)
+                + "\n\nСейчас они будут рассчитаны как категориальные. "
+                "Чтобы учитывать их как даты, откройте «Операции» → «Назначить столбцы дат...», "
+                "выберите формат и повторите анализ.",
+                parent=self,
+            )
+
+        try:
+            results = run_analysis(
+                self.current_dataframe,
+                self.current_file_path,
+                date_formats=self.manual_date_formats,
+            )
+        except (OSError, ValueError, RuntimeError) as error:
+            messagebox.showerror("Не удалось выполнить анализ", str(error), parent=self)
+            return
+
+        self.analysis_results = results
+        self._show_analysis_results(results, self.current_file_path)
+        self.status.set(
+            f"Анализ выполнен: {len(results.included_columns)} атрибутов; "
+            f"исключено прямых идентификаторов: {len(results.excluded_columns)}."
+        )
+
+        should_save = messagebox.askyesno(
+            "Сохранить результаты анализа?",
+            "Результаты показаны во вкладке «Анализ». Сохранить доступные таблицы CSV?",
+            parent=self,
+            default=messagebox.NO,
+        )
+        if not should_save:
+            return
+        output_directory = filedialog.askdirectory(
+            parent=self,
+            title="Выберите папку для таблиц анализа",
+            mustexist=True,
+        )
+        if not output_directory:
+            return
+        output_directory_path = Path(output_directory)
+        expected_outputs = [
+            output_directory_path / f"{self.current_file_path.stem}_statistics.csv",
+            output_directory_path / f"{self.current_file_path.stem}_pearson.csv",
+            output_directory_path / f"{self.current_file_path.stem}_spearman.csv",
+            output_directory_path / f"{self.current_file_path.stem}_correlation_n.csv",
+        ]
+        existing_outputs = [path for path in expected_outputs if path.exists()]
+        if existing_outputs and not messagebox.askyesno(
+            "Перезапись таблиц анализа",
+            "Следующие файлы уже существуют:\n"
+            + "\n".join(str(path) for path in existing_outputs)
+            + "\n\nПерезаписать их?",
+            parent=self,
+        ):
+            return
+        try:
+            outputs = export_analysis_results(
+                results,
+                self.current_file_path,
+                output_directory,
+            )
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Ошибка экспорта анализа", str(error), parent=self)
+            return
+        messagebox.showinfo(
+            "Результаты анализа сохранены",
+            "Созданы файлы:\n" + "\n".join(str(path) for path in outputs),
+            parent=self,
+        )
 
     def open_settings(self) -> None:
         if self.settings_window is not None and self.settings_window.winfo_exists():
@@ -377,10 +552,13 @@ class TableViewer(tk.Tk):
         )
 
         individual_state = "normal" if table_loaded else "disabled"
+        self.operations_menu.entryconfig(self.analysis_menu_index, state=individual_state)
+        self.operations_menu.entryconfig(self.date_menu_index, state=individual_state)
         self.operations_menu.entryconfig(self.types_menu_index, state=individual_state)
         self.operations_menu.entryconfig(self.classification_menu_index, state=individual_state)
         self.operations_menu.entryconfig(self.tokenization_menu_index, state=individual_state)
         self.operations_menu.entryconfig(self.removal_menu_index, state=individual_state)
+        self.analyze_button.configure(state=individual_state)
 
         qi_groups_state = "normal" if table_loaded else "disabled"
         self.operations_menu.entryconfig(self.quasi_identifier_groups_menu_index, state=qi_groups_state)
@@ -543,6 +721,7 @@ class TableViewer(tk.Tk):
             messagebox.showerror("Ошибка сохранения CSV", str(error), parent=self)
             return
 
+        self._show_anonymized_result(result, destination)
         report_path = self._offer_k_report(report, destination)
         self.status.set(f"k-анонимизация завершена. Результат: {destination.name}")
         profile_lines = [
@@ -771,6 +950,7 @@ class TableViewer(tk.Tk):
             messagebox.showerror("Ошибка сохранения CSV", str(error), parent=self)
             return
 
+        self._show_anonymized_result(execution.dataframe, destination)
         report_path = None
         if execution.k_report is not None:
             report_path = self._offer_k_report(execution.k_report, destination)

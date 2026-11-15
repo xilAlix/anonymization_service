@@ -40,6 +40,8 @@ from infrastructure.attribute_profile_store import (
     save_quasi_identifier_correlation_blocks,
 )
 from infrastructure.settings_manager import DEFAULT_SETTINGS_PATH, load_settings
+from application.analysis_workflow import run_analysis, export_analysis_results
+from data_analysis.descriptive_statistics import detect_date_format
 from application.k_anonymization_workflow import (
     LDiversityViolationError,
     execute_k_anonymization,
@@ -184,6 +186,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="Определить технические типы столбцов CSV-файла.",
     )
     analyze_parser.add_argument("csv_path", type=Path, help="Путь к CSV-файлу.")
+
+    analysis_data_parser = subparsers.add_parser(
+        "analyze-data",
+        help="Рассчитать описательную статистику и парные корреляции исходного CSV.",
+    )
+    analysis_data_parser.add_argument("input_csv", type=Path, help="Исходный CSV-файл.")
+    analysis_data_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Необязательный каталог для экспорта таблиц статистики и корреляций.",
+    )
+    analysis_data_parser.add_argument(
+        "--date-columns",
+        nargs="+",
+        default=[],
+        help="Столбцы, которые нужно вручную трактовать как даты.",
+    )
+    analysis_data_parser.add_argument(
+        "--date-format",
+        action="append",
+        default=[],
+        metavar="СТОЛБЕЦ=ФОРМАТ",
+        help="Явный strptime-формат для даты, например order_date=%%d/%%m/%%Y. Можно повторять.",
+    )
+    analysis_data_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Разрешить перезапись существующих CSV-таблиц анализа.",
+    )
 
     classify_parser = subparsers.add_parser(
         "classify-attributes",
@@ -390,6 +421,91 @@ def run_cli(arguments: list[str]) -> int:
     args = parser.parse_args(arguments)
 
     try:
+        if args.command == "analyze-data":
+            input_path = args.input_csv.resolve()
+            dataframe = load_csv(input_path)
+            date_formats: dict[str, str] = {}
+            requested_dates = set(args.date_columns)
+            unknown_dates = requested_dates - {str(column) for column in dataframe.columns}
+            if unknown_dates:
+                raise ValueError(
+                    "Столбцы дат отсутствуют в CSV: " + ", ".join(sorted(unknown_dates))
+                )
+
+            for item in args.date_format:
+                column, separator, date_format = item.partition("=")
+                if not separator or not column.strip() or not date_format.strip():
+                    raise ValueError(
+                        "Формат --date-format должен иметь вид СТОЛБЕЦ=ФОРМАТ, "
+                        "например order_date=%d/%m/%Y."
+                    )
+                column = column.strip()
+                if column not in dataframe.columns:
+                    raise ValueError(f"Столбец «{column}» отсутствует в CSV.")
+                if requested_dates and column not in requested_dates:
+                    raise ValueError(
+                        f"Для «{column}» задан формат, но столбец не указан в --date-columns."
+                    )
+                date_formats[column] = date_format.strip()
+
+            for column in requested_dates:
+                if column in date_formats:
+                    continue
+                detected_format, ambiguous = detect_date_format(dataframe[column])
+                if detected_format is None:
+                    reason = "формат неоднозначен" if ambiguous else "формат не распознан"
+                    raise ValueError(
+                        f"Для столбца «{column}» {reason}. Укажи явный формат: "
+                        f'--date-format "{column}=%d/%m/%Y".'
+                    )
+                date_formats[column] = detected_format
+
+            results = run_analysis(
+                dataframe,
+                input_path,
+                profile_path=PROFILE_PATH,
+                date_formats=date_formats,
+            )
+            print(f"Файл: {input_path}")
+            print(
+                f"Размер: {results.source_rows} строк × {results.source_columns} столбцов. "
+                f"Анализируемых атрибутов: {len(results.included_columns)}."
+            )
+            if results.excluded_columns:
+                print("Исключены вручную назначенные direct_identifier: " + ", ".join(results.excluded_columns))
+            print("\nОПИСАТЕЛЬНАЯ СТАТИСТИКА")
+            print(results.statistics.to_string())
+            if results.pearson.empty:
+                print("\nКорреляции не рассчитаны: нет количественных числовых атрибутов.")
+            else:
+                print("\nКОРРЕЛЯЦИЯ PEARSON")
+                print(results.pearson.to_string())
+                print("\nКОРРЕЛЯЦИЯ SPEARMAN")
+                print(results.spearman.to_string())
+                print("\nКОЛИЧЕСТВО ПАРНЫХ НАБЛЮДЕНИЙ N")
+                print(results.correlation_n.to_string())
+            if args.output_dir is not None:
+                expected = [
+                    args.output_dir / f"{input_path.stem}_statistics.csv",
+                    args.output_dir / f"{input_path.stem}_pearson.csv",
+                    args.output_dir / f"{input_path.stem}_spearman.csv",
+                    args.output_dir / f"{input_path.stem}_correlation_n.csv",
+                ]
+                existing = [path for path in expected if path.exists()]
+                if existing and not args.overwrite:
+                    raise FileExistsError(
+                        "Файлы анализа уже существуют: " + ", ".join(map(str, existing))
+                        + ". Для перезаписи используй --overwrite."
+                    )
+                outputs = export_analysis_results(results, input_path, args.output_dir)
+                print("\nСохранены таблицы:")
+                for path in outputs:
+                    print(f"  {path}")
+            else:
+                print("\nЭкспорт не выполнялся. Для сохранения укажи --output-dir.")
+            print("\nАнализ не изменяет исходный CSV.")
+            return 0
+
         if args.command == "analyze-types":
             dataframe = load_csv(args.csv_path)
             settings = load_settings(SETTINGS_PATH)

@@ -99,16 +99,41 @@ class AnonymizationWorkflowTests(unittest.TestCase):
             )
             dataframe = pd.DataFrame({"customer_id": ["C1"], "age": [25]})
 
-            result, affected, operation = apply_anonymization_operations(
+            execution = apply_anonymization_operations(
                 dataframe,
                 csv_path,
                 [REMOVE_DIRECT_IDENTIFIERS],
                 profile_path,
             )
 
-            self.assertEqual(operation, REMOVE_DIRECT_IDENTIFIERS)
-            self.assertEqual(affected, ["customer_id"])
-            self.assertEqual(list(result.columns), ["age"])
+            self.assertEqual(execution.operations, [REMOVE_DIRECT_IDENTIFIERS])
+            self.assertEqual(execution.affected_columns, ["customer_id"])
+            self.assertEqual(list(execution.dataframe.columns), ["age"])
+
+    def test_l_setting_does_not_run_for_tokenization_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            csv_path = root / "records.csv"
+            profile_path = root / "profiles.json"
+            save_manual_role_overrides(
+                csv_path,
+                {"customer_id": ["direct_identifier"]},
+                profile_path,
+            )
+            dataframe = pd.DataFrame({"customer_id": ["C1", "C2"]})
+
+            execution = apply_anonymization_operations(
+                dataframe,
+                csv_path,
+                [TOKENIZE_DIRECT_IDENTIFIERS],
+                profile_path,
+                enable_l_diversity=True,
+                default_l=500,
+            )
+
+            self.assertEqual(execution.operations, [TOKENIZE_DIRECT_IDENTIFIERS])
+            self.assertIsNone(execution.k_report)
+            self.assertTrue(all(value.startswith("ID_") for value in execution.dataframe["customer_id"]))
 
     def test_aggregate_rejects_conflicting_operations_for_same_columns(self):
         dataframe = pd.DataFrame({"customer_id": ["C1"]})

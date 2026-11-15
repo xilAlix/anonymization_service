@@ -13,6 +13,7 @@ from infrastructure.settings_manager import (
     AnonymizationSettings,
     AppSettings,
     DataTypeAnalysisSettings,
+    KAnonymizationSettings,
     load_settings,
     save_settings,
 )
@@ -105,6 +106,42 @@ class SettingsManagerTests(unittest.TestCase):
             )
             save_settings(settings, path)
             self.assertEqual(load_settings(path), settings)
+
+
+    def test_l_diversity_settings_roundtrip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            expected = AppSettings(
+                k_anonymization=KAnonymizationSettings(
+                    default_k=7,
+                    max_row_suppression_percent=3.0,
+                    numeric_representative="median",
+                    enable_l_diversity=True,
+                    default_l=3,
+                    l_diversity_variant="entropy",
+                )
+            )
+            save_settings(expected, path)
+            self.assertEqual(load_settings(path), expected)
+
+    def test_legacy_settings_default_l_diversity_to_disabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text('{"k_anonymization": {"default_k": 4}}', encoding="utf-8")
+            settings = load_settings(path)
+            self.assertFalse(settings.k_anonymization.enable_l_diversity)
+            self.assertEqual(settings.k_anonymization.default_l, 2)
+            self.assertEqual(settings.k_anonymization.l_diversity_variant, "both")
+
+    def test_invalid_l_diversity_settings_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                '{"k_anonymization": {"enable_l_diversity": true, "default_l": 1}}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "l по умолчанию"):
+                load_settings(path)
 
 
 if __name__ == "__main__":
