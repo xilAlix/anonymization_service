@@ -1,3 +1,4 @@
+import math
 import tkinter as tk
 from collections.abc import Callable
 from tkinter import messagebox, ttk
@@ -89,6 +90,7 @@ class SettingsWindow(tk.Toplevel):
         self.l_diversity_variant = tk.StringVar(
             value=L_VARIANT_LABELS[settings.k_anonymization.l_diversity_variant]
         )
+        self.l_entropy_hint = tk.StringVar()
 
         shell = ttk.Frame(self, style="Settings.TFrame")
         shell.pack(fill="both", expand=True)
@@ -408,6 +410,18 @@ class SettingsWindow(tk.Toplevel):
             wraplength=650,
         )
         l_value_hint.grid(row=8, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.l_entropy_hint_label = ttk.Label(
+            k_frame,
+            textvariable=self.l_entropy_hint,
+            style="Settings.Hint.TLabel",
+            wraplength=650,
+        )
+        self.l_entropy_hint_label.grid(
+            row=9, column=0, columnspan=2, sticky="w", pady=(2, 0)
+        )
+        self.default_l.trace_add("write", self._update_l_entropy_hint)
+        self.l_diversity_variant.trace_add("write", self._update_l_entropy_hint)
+        self._update_l_entropy_hint()
         ToolTip(self.default_l_input, "l должно быть целым числом от 2. Чем выше l, тем строже проверка.")
 
         tk.Label(
@@ -415,7 +429,7 @@ class SettingsWindow(tk.Toplevel):
             text="Критерии l-разнообразия:",
             background="#F0F3F7",
             foreground="#20384D",
-        ).grid(row=9, column=0, sticky="w", pady=(10, 0))
+        ).grid(row=10, column=0, sticky="w", pady=(10, 0))
         self.l_variant_select = ttk.Combobox(
             k_frame,
             state="readonly",
@@ -424,14 +438,14 @@ class SettingsWindow(tk.Toplevel):
             width=28,
         )
         self.l_variant_select.grid(
-            row=9, column=1, sticky="w", padx=(16, 0), pady=(10, 0)
+            row=10, column=1, sticky="w", padx=(16, 0), pady=(10, 0)
         )
         ttk.Label(
             k_frame,
             text="Distinct — число разных значений; Entropy — учитывает частоты. «Оба» требует прохождения двух критериев.",
             style="Settings.Hint.TLabel",
             wraplength=650,
-        ).grid(row=10, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        ).grid(row=11, column=0, columnspan=2, sticky="w", pady=(2, 0))
         ToolTip(
             self.l_variant_select,
             "Для Entropy применяется H(S) ≥ ln(l). При выборе «Оба» должны пройти и Distinct, и Entropy.",
@@ -448,7 +462,7 @@ class SettingsWindow(tk.Toplevel):
             wraplength=650,
         )
         multi_sensitive_hint.grid(
-            row=11, column=0, columnspan=2, sticky="ew", pady=(12, 0)
+            row=12, column=0, columnspan=2, sticky="ew", pady=(12, 0)
         )
 
         buttons = ttk.Frame(shell, style="Settings.TFrame", padding=(18, 10, 18, 16))
@@ -519,6 +533,37 @@ class SettingsWindow(tk.Toplevel):
         state = "normal" if self.enable_l_diversity.get() else "disabled"
         self.default_l_input.configure(state=state)
         self.l_variant_select.configure(state="readonly" if state == "normal" else "disabled")
+        self._update_l_entropy_hint()
+
+    def _update_l_entropy_hint(self, *_args) -> None:
+        try:
+            l_value = int(self.default_l.get())
+        except (TypeError, ValueError):
+            self.l_entropy_hint.set("Для расчёта порога введи целое значение l не меньше 2.")
+            return
+        if l_value < 2:
+            self.l_entropy_hint.set("Значение l должно быть не меньше 2.")
+            return
+
+        threshold = math.log(l_value)
+        threshold_text = f"{threshold:.6f}".replace(".", ",")
+        variant = L_VARIANT_VALUES.get(self.l_diversity_variant.get(), "both")
+        if variant == "distinct":
+            description = (
+                f"Справочный порог Entropy: H(S) ≥ ln({l_value}) = "
+                f"{threshold_text} нат. Сейчас выбран только Distinct, поэтому этот порог не участвует в решении."
+            )
+        elif variant == "entropy":
+            description = (
+                f"Требование Entropy: H(S) ≥ ln({l_value}) = "
+                f"{threshold_text} нат."
+            )
+        else:
+            description = (
+                f"Для Entropy при режиме «Оба» требуется H(S) ≥ ln({l_value}) = "
+                f"{threshold_text} нат.; дополнительно проверяется не менее {l_value} разных значений."
+            )
+        self.l_entropy_hint.set(description)
 
     def _save(self) -> None:
         try:

@@ -24,7 +24,7 @@ DATE_FORMATS: dict[str, str] = {
 _AUTO_DATE_FORMATS = tuple(dict.fromkeys(DATE_FORMATS.values()))
 
 STATISTIC_ROWS = [
-    "n",
+    "Количество непустых значений (n)",
     "Среднее (оценка мат. ожидания)",
     "Выборочная дисперсия",
     "Стандартное отклонение",
@@ -33,7 +33,7 @@ STATISTIC_ROWS = [
     "Максимум",
     "Q1 (25%)",
     "Q3 (75%)",
-    "IQR",
+    "Межквартильный размах (IQR = Q3 − Q1)",
     "Нижние выбросы",
     "Верхние выбросы",
     "Асимметрия",
@@ -274,7 +274,7 @@ def calculate_descriptive_statistics(
         if kind == "numeric":
             values = source.dropna()
             n = len(values)
-            metrics["n"] = n
+            metrics["Количество непустых значений (n)"] = n
             metrics["Уникальные значения"] = int(values.nunique(dropna=True))
             if n:
                 metrics["Среднее (оценка мат. ожидания)"] = float(values.mean())
@@ -292,7 +292,7 @@ def calculate_descriptive_statistics(
                 upper_fence = q3 + 1.5 * iqr
                 metrics["Q1 (25%)"] = q1
                 metrics["Q3 (75%)"] = q3
-                metrics["IQR"] = iqr
+                metrics["Межквартильный размах (IQR = Q3 − Q1)"] = iqr
                 metrics["Нижние выбросы"] = _format_extreme_outliers(
                     values[values < lower_fence], lower=True
                 )
@@ -307,7 +307,7 @@ def calculate_descriptive_statistics(
         elif kind == "categorical":
             values = source.dropna()
             n = len(values)
-            metrics["n"] = n
+            metrics["Количество непустых значений (n)"] = n
             metrics["Уникальные значения"] = int(values.nunique(dropna=True))
             metrics["Мода"] = _format_modes(values)
             entropy = _entropy_bits(values)
@@ -318,11 +318,12 @@ def calculate_descriptive_statistics(
             if parsed is None:
                 parsed = pd.to_datetime(source, errors="coerce")
             valid = parsed.dropna()
-            n = len(valid)
-            metrics["n"] = n
-            metrics["Первая дата"] = _display_value(valid.min()) if n else "—"
-            metrics["Последняя дата"] = _display_value(valid.max()) if n else "—"
-            metrics["Медианная дата"] = _display_value(_median_timestamp(valid)) if n else "—"
+            n = int(source.notna().sum())
+            valid_count = len(valid)
+            metrics["Количество непустых значений (n)"] = n
+            metrics["Первая дата"] = _display_value(valid.min()) if valid_count else "—"
+            metrics["Последняя дата"] = _display_value(valid.max()) if valid_count else "—"
+            metrics["Медианная дата"] = _display_value(_median_timestamp(valid)) if valid_count else "—"
             metrics["Мода"] = _format_modes(valid)
             metrics["Уникальные значения"] = int(valid.nunique())
             metrics["Ошибки распознавания дат"] = int(date_errors.get(column, 0))

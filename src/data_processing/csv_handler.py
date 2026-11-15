@@ -1,3 +1,4 @@
+import csv
 from pathlib import Path
 
 import pandas as pd
@@ -11,12 +12,19 @@ def load_csv(file_path: str | Path) -> pd.DataFrame:
     last_error: Exception | None = None
     for encoding in ("utf-8-sig", "utf-8", "cp1251"):
         try:
-            dataframe = pd.read_csv(path, sep=None, engine="python", encoding=encoding)
-            if len(dataframe.columns) == 1:
-                for separator in (",", ";", "\t", "|"):
-                    candidate = pd.read_csv(path, sep=separator, encoding=encoding)
-                    if len(candidate.columns) > len(dataframe.columns):
-                        dataframe = candidate
+            with path.open("r", encoding=encoding, newline="") as file:
+                sample = file.read(8192)
+            try:
+                separator = csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+            except csv.Error:
+                separator = ","
+
+            dataframe = pd.read_csv(
+                path,
+                sep=separator,
+                encoding=encoding,
+                dtype_backend="numpy_nullable",
+            )
             if len(dataframe.columns) == 0:
                 raise ValueError("CSV-файл не содержит столбцов.")
             return dataframe

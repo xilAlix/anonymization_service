@@ -65,6 +65,43 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertTrue(self.profile_path.exists())
 
+    def test_set_roles_warns_when_direct_identifier_is_also_sensitive(self):
+        output = StringIO()
+        with redirect_stdout(output):
+            code = cli.run_cli([
+                "set-roles", str(self.csv_path),
+                "--column", "customer_id",
+                "--roles", "direct_identifier", "sensitive_attribute",
+            ])
+        self.assertEqual(code, 0)
+        self.assertIn("исключён из l-проверки", output.getvalue())
+
+    def test_evaluate_l_reports_not_evaluable_when_only_sensitive_field_is_direct_identifier(self):
+        dataframe = pd.DataFrame({"qi": ["same"] * 4, "account": ["A", "B", "C", "D"]})
+        dataframe.to_csv(self.csv_path, index=False)
+        group = new_manual_quasi_identifier_group("QI", ["qi"])
+        save_quasi_identifier_groups(
+            self.csv_path, [group], list(dataframe.columns), self.profile_path
+        )
+        save_manual_role_overrides(
+            self.csv_path,
+            {"account": ["direct_identifier", "sensitive_attribute"]},
+            self.profile_path,
+        )
+        report_path = self.root / "l-report.json"
+        output = StringIO()
+        with redirect_stdout(output):
+            code = cli.run_cli([
+                "evaluate-l-diversity", str(self.csv_path),
+                "--l", "2", "--variant", "both",
+                "--report-json", str(report_path),
+            ])
+        self.assertEqual(code, 1)
+        self.assertIn("статус=not_evaluable", output.getvalue())
+        self.assertIn("account", output.getvalue())
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(report["status"], "not_evaluable")
+
     def test_anonymize_requires_manual_role_and_writes_output(self):
         error_output = StringIO()
         with redirect_stderr(error_output):

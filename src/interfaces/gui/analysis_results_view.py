@@ -72,7 +72,6 @@ class AnalysisResultsView(ttk.Frame):
         self._add_table_tab("Статистика", results.statistics)
         self._add_matrix_tab("Pearson", results.pearson, "Нет числовых атрибутов для корреляции Pearson.")
         self._add_matrix_tab("Spearman", results.spearman, "Нет числовых атрибутов для корреляции Spearman.")
-        self._add_matrix_tab("N", results.correlation_n, "Матрица N недоступна: нет числовых атрибутов.")
 
     def _add_table_tab(self, title: str, dataframe: pd.DataFrame) -> None:
         frame = ttk.Frame(self.notebook)

@@ -482,14 +482,11 @@ def run_cli(arguments: list[str]) -> int:
                 print(results.pearson.to_string())
                 print("\nКОРРЕЛЯЦИЯ SPEARMAN")
                 print(results.spearman.to_string())
-                print("\nКОЛИЧЕСТВО ПАРНЫХ НАБЛЮДЕНИЙ N")
-                print(results.correlation_n.to_string())
             if args.output_dir is not None:
                 expected = [
                     args.output_dir / f"{input_path.stem}_statistics.csv",
                     args.output_dir / f"{input_path.stem}_pearson.csv",
                     args.output_dir / f"{input_path.stem}_spearman.csv",
-                    args.output_dir / f"{input_path.stem}_correlation_n.csv",
                 ]
                 existing = [path for path in expected if path.exists()]
                 if existing and not args.overwrite:
@@ -557,6 +554,15 @@ def run_cli(arguments: list[str]) -> int:
             save_manual_role_overrides(args.csv_path, overrides, PROFILE_PATH)
             assigned = role_labels(overrides[args.column])
             print(f"Ручные роли столбца «{args.column}» сохранены: {assigned}.")
+            if {
+                "direct_identifier",
+                "sensitive_attribute",
+            }.issubset(set(overrides[args.column])):
+                print(
+                    "Предупреждение: столбец одновременно назначен прямым идентификатором "
+                    "и конфиденциальным атрибутом. Он будет исключён из l-проверки "
+                    "как прямой идентификатор."
+                )
             print(f"Профиль: {PROFILE_PATH}")
             return 0
 
@@ -749,6 +755,14 @@ def run_cli(arguments: list[str]) -> int:
                 f"нарушений={report['failed_check_count']} | "
                 f"статус={report['status']}"
             )
+            excluded = report.get("excluded_sensitive_direct_identifiers", [])
+            if excluded:
+                print(
+                    "Исключены из l-проверки как прямые идентификаторы: "
+                    + ", ".join(excluded)
+                )
+            if report.get("reason"):
+                print("Причина: " + report["reason"])
             for profile in report["profiles"]:
                 print(
                     f"{profile['profile_name']}: проверок={profile['check_count']}, "

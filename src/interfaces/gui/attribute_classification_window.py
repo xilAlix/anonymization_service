@@ -29,8 +29,8 @@ class AttributeRoleEditor(tk.Toplevel):
     ):
         super().__init__(parent)
         self.title(f"Роли атрибута: {attribute}")
-        self.geometry("510x390")
-        self.minsize(450, 340)
+        self.geometry("530x430")
+        self.minsize(470, 370)
         self.transient(parent)
         self.configure(background=APP_BACKGROUND)
 
@@ -40,6 +40,9 @@ class AttributeRoleEditor(tk.Toplevel):
             role: tk.BooleanVar(value=role in current_roles)
             for role in ROLE_LABELS
         }
+        self.role_warning = tk.StringVar()
+        self._role_vars["direct_identifier"].trace_add("write", self._update_role_warning)
+        self._role_vars["sensitive_attribute"].trace_add("write", self._update_role_warning)
 
         style = ttk.Style(self)
         style.configure("RoleEditor.TFrame", background=APP_BACKGROUND)
@@ -87,17 +90,27 @@ class AttributeRoleEditor(tk.Toplevel):
             role_check.grid(row=index, column=0, sticky="w", pady=3)
             ToolTip(role_check, role_tooltips[role])
 
+        ttk.Label(
+            content,
+            textvariable=self.role_warning,
+            foreground="#9A6700",
+            background=APP_BACKGROUND,
+            wraplength=460,
+            justify="left",
+        ).grid(row=5, column=0, sticky="w", pady=(8, 0))
+        self._update_role_warning()
+
         reasons_info = ttk.Label(
             content,
             text="ⓘ Автоматические предложения и основания",
             style="RoleEditor.TLabel",
             cursor="question_arrow",
         )
-        reasons_info.grid(row=5, column=0, sticky="w", pady=(16, 8))
+        reasons_info.grid(row=6, column=0, sticky="w", pady=(12, 8))
         ToolTip(reasons_info, self._format_suggestions(suggestions))
 
         buttons = ttk.Frame(content, style="RoleEditor.TFrame")
-        buttons.grid(row=6, column=0, sticky="ew", pady=(18, 0))
+        buttons.grid(row=7, column=0, sticky="ew", pady=(18, 0))
         ttk.Button(buttons, text="Сбросить к автоматическим", command=self._reset).pack(
             side="left"
         )
@@ -106,6 +119,18 @@ class AttributeRoleEditor(tk.Toplevel):
         )
         ttk.Button(buttons, text="Сохранить", command=self._save).pack(side="right")
         self.grab_set()
+
+    def _update_role_warning(self, *_args) -> None:
+        if (
+            self._role_vars["direct_identifier"].get()
+            and self._role_vars["sensitive_attribute"].get()
+        ):
+            self.role_warning.set(
+                "⚠ Этот столбец одновременно отмечен как прямой идентификатор и "
+                "конфиденциальный атрибут. Он будет исключён из l-проверки как прямой идентификатор."
+            )
+        else:
+            self.role_warning.set("")
 
     @staticmethod
     def _format_suggestions(suggestions: tuple[RoleSuggestion, ...]) -> str:
@@ -121,6 +146,16 @@ class AttributeRoleEditor(tk.Toplevel):
 
     def _save(self) -> None:
         roles = [role for role, variable in self._role_vars.items() if variable.get()]
+        if "direct_identifier" in roles and "sensitive_attribute" in roles:
+            confirmed = messagebox.askyesno(
+                "Совмещение ролей",
+                "Столбец одновременно назначен прямым идентификатором и конфиденциальным атрибутом.\n\n"
+                "При l-проверке он будет исключён как прямой идентификатор и не будет участвовать в проверке.\n\n"
+                "Сохранить такое назначение?",
+                parent=self,
+            )
+            if not confirmed:
+                return
         if self._on_save(roles):
             self.destroy()
 

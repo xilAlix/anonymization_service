@@ -28,6 +28,7 @@ from data_processing.schema_inspector import analyze_column_types
 from infrastructure.settings_manager import AppSettings, load_settings
 from application.analysis_workflow import run_analysis, export_analysis_results
 from interfaces.gui.analysis_results_view import AnalysisResultsView, DataFrameTable, DateColumnDialog
+from interfaces.gui.l_diversity_results_view import LDiversityResultsWindow
 from data_analysis.descriptive_statistics import inspect_date_columns
 from interfaces.gui.attribute_classification_window import AttributeClassificationWindow
 from interfaces.gui.column_types_window import ColumnTypesWindow
@@ -84,6 +85,7 @@ class TableViewer(tk.Tk):
         self.column_types_window: ColumnTypesWindow | None = None
         self.attribute_classification_window: AttributeClassificationWindow | None = None
         self.quasi_identifier_groups_window: QuasiIdentifierGroupsWindow | None = None
+        self.l_diversity_window: LDiversityResultsWindow | None = None
 
         self.title("Сервис анонимизации")
         self.geometry("1120x700")
@@ -465,7 +467,6 @@ class TableViewer(tk.Tk):
             output_directory_path / f"{self.current_file_path.stem}_statistics.csv",
             output_directory_path / f"{self.current_file_path.stem}_pearson.csv",
             output_directory_path / f"{self.current_file_path.stem}_spearman.csv",
-            output_directory_path / f"{self.current_file_path.stem}_correlation_n.csv",
         ]
         existing_outputs = [path for path in expected_outputs if path.exists()]
         if existing_outputs and not messagebox.askyesno(
@@ -638,19 +639,31 @@ class TableViewer(tk.Tk):
 
         if k_settings.enable_l_diversity:
             sensitive = []
+            excluded_from_l = []
             if self.current_file_path is not None:
                 try:
                     roles = load_manual_role_overrides(self.current_file_path)
-                    sensitive = [
-                        name for name, assigned in roles.items()
-                        if "sensitive_attribute" in assigned
-                        and self.current_dataframe is not None
-                        and name in self.current_dataframe.columns
-                    ]
+                    for name, assigned in roles.items():
+                        if (
+                            self.current_dataframe is None
+                            or name not in self.current_dataframe.columns
+                            or "sensitive_attribute" not in assigned
+                        ):
+                            continue
+                        if "direct_identifier" in assigned:
+                            excluded_from_l.append(name)
+                        else:
+                            sensitive.append(name)
                 except (OSError, ValueError):
                     sensitive = []
+                    excluded_from_l = []
             sensitive_text = ", ".join(sensitive) if sensitive else "не назначены"
-            details += f"  |  Конфиденциальные поля: {sensitive_text}"
+            details += f"  |  Конфиденциальные поля для l: {sensitive_text}"
+            if excluded_from_l:
+                details += (
+                    "  |  Не входят в l как прямые идентификаторы: "
+                    + ", ".join(excluded_from_l)
+                )
         self.plan_info.set(details)
 
     def run_k_anonymization(self) -> None:
@@ -710,6 +723,7 @@ class TableViewer(tk.Tk):
             messagebox.showerror(
                 "Проверка l-разнообразия не пройдена", details, parent=self
             )
+            self._show_l_diversity_diagnostics(error.report.get("l_diversity", {}))
             return
         except (OSError, ValueError, RuntimeError) as error:
             messagebox.showerror("k-анонимизация не выполнена", str(error), parent=self)
@@ -756,6 +770,7 @@ class TableViewer(tk.Tk):
             + report_message,
             parent=self,
         )
+        self._show_l_diversity_diagnostics(report.get("l_diversity", {}))
 
     def _offer_k_report(self, report: dict, csv_path: Path) -> Path | None:
         should_save = messagebox.askyesno(
@@ -937,6 +952,7 @@ class TableViewer(tk.Tk):
             messagebox.showerror(
                 "Проверка l-разнообразия не пройдена", details, parent=self
             )
+            self._show_l_diversity_diagnostics(error.report.get("l_diversity", {}))
             return
         except (OSError, ValueError, RuntimeError) as error:
             messagebox.showerror(
@@ -1000,6 +1016,17 @@ class TableViewer(tk.Tk):
         completion_title = "Суммарная анонимизация завершена" if aggregate else "Операция завершена"
         self.status.set(f"{completion_title}: {operations_text}. Результат: {destination.name}")
         messagebox.showinfo(completion_title, "\n\n".join(details), parent=self)
+        if execution.k_report is not None:
+            self._show_l_diversity_diagnostics(
+                execution.k_report.get("l_diversity", {})
+            )
+
+    def _show_l_diversity_diagnostics(self, report: dict) -> None:
+        if report.get("status") not in {"satisfied", "failed", "not_evaluable"}:
+            return
+        if self.l_diversity_window is not None and self.l_diversity_window.winfo_exists():
+            self.l_diversity_window.destroy()
+        self.l_diversity_window = LDiversityResultsWindow(self, report)
 
     def show_attribute_classification(self) -> None:
         if self.current_dataframe is None or self.current_file_path is None:

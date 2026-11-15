@@ -10,7 +10,7 @@ def calculate_correlations(
     min_periods: int = 3,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     if min_periods < 3:
-        raise ValueError("По спецификации 0.5.0 корреляция рассчитывается минимум по 3 парам наблюдений.")
+        raise ValueError("Корреляция рассчитывается минимум по 3 совместно непустым парам наблюдений.")
 
     numeric_columns = [
         str(column)

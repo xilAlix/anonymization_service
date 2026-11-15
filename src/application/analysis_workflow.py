@@ -101,7 +101,6 @@ def export_analysis_results(
         (results.statistics, f"{source.stem}_statistics.csv", "Показатель"),
         (results.pearson, f"{source.stem}_pearson.csv", "Атрибут"),
         (results.spearman, f"{source.stem}_spearman.csv", "Атрибут"),
-        (results.correlation_n, f"{source.stem}_correlation_n.csv", "Атрибут"),
     ]
     for table, filename, index_label in tables:
         if table.empty:

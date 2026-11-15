@@ -27,10 +27,29 @@ class LDiversityViolationError(RuntimeError):
             if not check.get("satisfied")
         ]
         failed_by_scope = l_report.get("failed_by_scope", {})
+        if l_report.get("status") == "not_evaluable":
+            reason = l_report.get("reason", "Нет подходящих конфиденциальных атрибутов.")
+            lines = [
+                "Проверку l-разнообразия невозможно выполнить. CSV-результат не сохранён.",
+                reason,
+            ]
+            excluded = l_report.get("excluded_sensitive_direct_identifiers", [])
+            if excluded:
+                lines.append(
+                    "Исключены как прямые идентификаторы: " + ", ".join(excluded) + "."
+                )
+            super().__init__("\n".join(lines))
+            return
+
         lines = [
             "l-разнообразие не выполнено. CSV-результат не сохранён (CSV не создан).",
             f"Нарушений: {len(failures)} из {l_report.get('check_count', len(failures))} проверок.",
         ]
+        excluded = l_report.get("excluded_sensitive_direct_identifiers", [])
+        if excluded:
+            lines.append(
+                "Не включены в l-проверку как прямые идентификаторы: " + ", ".join(excluded) + "."
+            )
 
         conditional = next(
             (
@@ -83,6 +102,60 @@ class LDiversityViolationError(RuntimeError):
         super().__init__("\n".join(lines))
 
 
+
+def _select_l_sensitive_attributes(
+    manual_overrides: dict[str, list[str]],
+    available_columns: list[str] | pd.Index,
+) -> tuple[list[str], list[str]]:
+    """Исключает прямые идентификаторы из набора чувствительных атрибутов l-проверки."""
+    available = set(map(str, available_columns))
+    sensitive: list[str] = []
+    excluded_direct: list[str] = []
+    for column, roles in manual_overrides.items():
+        if column not in available or "sensitive_attribute" not in roles:
+            continue
+        if "direct_identifier" in roles:
+            excluded_direct.append(column)
+        else:
+            sensitive.append(column)
+    return sensitive, excluded_direct
+
+
+def _not_evaluable_l_report(
+    l_value: int,
+    variant: str,
+    excluded_direct: list[str],
+) -> dict[str, Any]:
+    if excluded_direct:
+        reason = (
+            "Нет конфиденциальных атрибутов, доступных для l-проверки: все назначенные "
+            "конфиденциальные поля одновременно имеют роль прямого идентификатора и "
+            "поэтому исключены. Назначьте роль конфиденциального атрибута другому "
+            "столбцу или снимите с него роль прямого идентификатора, если она ошибочна."
+        )
+    else:
+        reason = (
+            "Для l-проверки не назначено ни одного конфиденциального атрибута. "
+            "Откройте классификацию атрибутов и вручную назначьте эту роль хотя бы одному столбцу."
+        )
+    return {
+        "status": "not_evaluable",
+        "reason": reason,
+        "l": l_value,
+        "variant": variant,
+        "sensitive_attributes": [],
+        "excluded_sensitive_direct_identifiers": list(excluded_direct),
+        "warnings": [reason] if excluded_direct else [],
+        "profile_count": 0,
+        "check_count": 0,
+        "failed_check_count": 0,
+        "failed_by_scope": {},
+        "failure_examples": [],
+        "profiles": [],
+        "checks": [],
+        "notes": [reason],
+    }
+
 def execute_k_anonymization(
     dataframe: pd.DataFrame,
     source_csv_path: str | Path,
@@ -106,16 +179,26 @@ def execute_k_anonymization(
     )
     if enable_l_diversity:
         overrides = load_manual_role_overrides(source_csv_path, profile_path)
-        sensitive_attributes = [
-            column for column, roles in overrides.items()
-            if "sensitive_attribute" in roles and column in result.columns
-        ]
+        sensitive_attributes, excluded_direct = _select_l_sensitive_attributes(
+            overrides, result.columns
+        )
+        if not sensitive_attributes:
+            l_report = _not_evaluable_l_report(default_l, l_variant, excluded_direct)
+            report["l_diversity"] = l_report
+            raise LDiversityViolationError({**report, "status": "l_diversity_not_evaluable"})
         l_report = evaluate_l_diversity(
             result,
             profiles,
             sensitive_attributes,
             l_value=default_l,
             variant=l_variant,
+        )
+        l_report["excluded_sensitive_direct_identifiers"] = excluded_direct
+        l_report["warnings"] = (
+            [
+                "Поля, одновременно назначенные direct_identifier и sensitive_attribute, "
+                "исключены из l-проверки: " + ", ".join(excluded_direct) + "."
+            ] if excluded_direct else []
         )
         report["l_diversity"] = l_report
         if l_report["status"] != "satisfied":
@@ -153,13 +236,22 @@ def evaluate_current_l(
 ) -> dict[str, Any]:
     profiles = load_quasi_identifier_groups(source_csv_path, profile_path)
     overrides = load_manual_role_overrides(source_csv_path, profile_path)
-    sensitive_attributes = [
-        column for column, roles in overrides.items()
-        if "sensitive_attribute" in roles and column in dataframe.columns
-    ]
-    return evaluate_l_diversity(
+    sensitive_attributes, excluded_direct = _select_l_sensitive_attributes(
+        overrides, dataframe.columns
+    )
+    if not sensitive_attributes:
+        return _not_evaluable_l_report(l_value, variant, excluded_direct)
+    report = evaluate_l_diversity(
         dataframe, profiles, sensitive_attributes, l_value=l_value, variant=variant
     )
+    report["excluded_sensitive_direct_identifiers"] = excluded_direct
+    report["warnings"] = (
+        [
+            "Поля, одновременно назначенные direct_identifier и sensitive_attribute, "
+            "исключены из l-проверки: " + ", ".join(excluded_direct) + "."
+        ] if excluded_direct else []
+    )
+    return report
 
 
 def save_k_anonymity_report(report: dict, output_path: str | Path) -> None:
