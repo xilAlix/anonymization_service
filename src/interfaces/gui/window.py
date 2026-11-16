@@ -7,16 +7,14 @@ import pandas as pd
 
 from application.k_anonymization_workflow import (
     LDiversityViolationError,
-    execute_k_anonymization,
     save_k_anonymity_report,
 )
 from application.anonymization_workflow import (
     K_ANONYMITY,
     REMOVE_DIRECT_IDENTIFIERS,
     TOKENIZE_DIRECT_IDENTIFIERS,
-    apply_anonymization_operations,
 )
-from data_processing.csv_handler import load_csv, save_csv
+from data_processing.csv_handler import load_csv
 from data_processing.quasi_identifier_analyzer import suggest_quasi_identifier_groups
 from infrastructure.attribute_profile_store import (
     load_manual_role_overrides,
@@ -26,8 +24,11 @@ from infrastructure.attribute_profile_store import (
 )
 from data_processing.schema_inspector import analyze_column_types
 from infrastructure.settings_manager import AppSettings, load_settings
-from application.analysis_workflow import run_analysis, export_analysis_results
+from application.analysis_workflow import export_analysis_results
+from application.service import analyze_session_source, execute_anonymization_for_session
+from application.session_workflow import DatasetSession
 from interfaces.gui.analysis_results_view import AnalysisResultsView, DataFrameTable, DateColumnDialog
+from interfaces.gui.session_evaluation_view import SessionEvaluationView
 from interfaces.gui.l_diversity_results_view import LDiversityResultsWindow
 from data_analysis.descriptive_statistics import inspect_date_columns
 from interfaces.gui.attribute_classification_window import AttributeClassificationWindow
@@ -77,6 +78,8 @@ class TableViewer(tk.Tk):
         self.result_tab: ttk.Frame | None = None
         self.analysis_tab: ttk.Frame | None = None
         self.analysis_results = None
+        self.evaluation_tab: ttk.Frame | None = None
+        self.dataset_session: DatasetSession | None = None
         self.current_dataframe: pd.DataFrame | None = None
         self.current_file_path: Path | None = None
         self.preview_limit = 500
@@ -286,7 +289,7 @@ class TableViewer(tk.Tk):
             tree.insert("", "end", values=values, tags=(row_style,))
 
     def _clear_derived_tabs(self) -> None:
-        for attribute in ("result_tab", "analysis_tab"):
+        for attribute in ("result_tab", "analysis_tab", "evaluation_tab"):
             tab = getattr(self, attribute, None)
             if tab is not None:
                 try:
@@ -311,7 +314,22 @@ class TableViewer(tk.Tk):
         ).pack(anchor="w")
         DataFrameTable(self.result_tab, dataframe, include_index=False).pack(fill="both", expand=True)
         self.workspace.tab(self.result_tab, text="Результат анонимизации")
-        self.workspace.select(self.result_tab)
+
+        if self.dataset_session is not None:
+            self._show_session_evaluation()
+
+    def _show_session_evaluation(self) -> None:
+        if self.dataset_session is None or self.dataset_session.result_dataframe is None:
+            return
+        if self.evaluation_tab is None or not self.evaluation_tab.winfo_exists():
+            self.evaluation_tab = ttk.Frame(self.workspace)
+            self.workspace.add(self.evaluation_tab, text="Оценка результата")
+        else:
+            for child in self.evaluation_tab.winfo_children():
+                child.destroy()
+        SessionEvaluationView(self.evaluation_tab, self.dataset_session).pack(fill="both", expand=True)
+        self.workspace.tab(self.evaluation_tab, text="Оценка результата")
+        self.workspace.select(self.evaluation_tab)
 
     def _show_analysis_results(self, results, source_path: Path) -> None:
         if self.analysis_tab is None or not self.analysis_tab.winfo_exists():
@@ -343,9 +361,10 @@ class TableViewer(tk.Tk):
 
         self._clear_derived_tabs()
         self.manual_date_formats = {}
-        self.current_dataframe = dataframe.copy(deep=True)
         self.current_file_path = source_path.resolve()
-        self._populate_dataframe_table(self.table, dataframe)
+        self.dataset_session = DatasetSession.start(self.current_file_path, dataframe)
+        self.current_dataframe = self.dataset_session.source_dataframe
+        self._populate_dataframe_table(self.table, self.current_dataframe)
 
         self.operations_menu.entryconfig(self.types_menu_index, state="normal")
         self.operations_menu.entryconfig(self.classification_menu_index, state="normal")
@@ -431,9 +450,10 @@ class TableViewer(tk.Tk):
             )
 
         try:
-            results = run_analysis(
-                self.current_dataframe,
-                self.current_file_path,
+            if self.dataset_session is None:
+                raise RuntimeError("Рабочая сессия таблицы не создана. Откройте CSV повторно.")
+            results = analyze_session_source(
+                self.dataset_session,
                 date_formats=self.manual_date_formats,
             )
         except (OSError, ValueError, RuntimeError) as error:
@@ -704,15 +724,21 @@ class TableViewer(tk.Tk):
         ):
             return
         try:
-            result, report = execute_k_anonymization(
-                self.current_dataframe,
-                self.current_file_path,
+            if self.dataset_session is None:
+                raise RuntimeError("Рабочая сессия таблицы не создана. Откройте CSV повторно.")
+            outcome = execute_anonymization_for_session(
+                self.dataset_session,
+                destination,
+                [K_ANONYMITY],
                 default_k=k_value,
                 representative=self.settings.k_anonymization.numeric_representative,
                 enable_l_diversity=self.settings.k_anonymization.enable_l_diversity,
                 default_l=self.settings.k_anonymization.default_l,
                 l_variant=self.settings.k_anonymization.l_diversity_variant,
+                overwrite=destination.exists(),
             )
+            result = outcome.execution.dataframe
+            report = outcome.execution.k_report or {}
         except LDiversityViolationError as error:
             report_path = self._save_l_failure_report(error.report, destination)
             details = str(error)
@@ -727,12 +753,6 @@ class TableViewer(tk.Tk):
             return
         except (OSError, ValueError, RuntimeError) as error:
             messagebox.showerror("k-анонимизация не выполнена", str(error), parent=self)
-            return
-
-        try:
-            save_csv(result, destination)
-        except (OSError, ValueError) as error:
-            messagebox.showerror("Ошибка сохранения CSV", str(error), parent=self)
             return
 
         self._show_anonymized_result(result, destination)
@@ -931,16 +951,20 @@ class TableViewer(tk.Tk):
             return
 
         try:
-            execution = apply_anonymization_operations(
-                self.current_dataframe,
-                self.current_file_path,
+            if self.dataset_session is None:
+                raise RuntimeError("Рабочая сессия таблицы не создана. Откройте CSV повторно.")
+            outcome = execute_anonymization_for_session(
+                self.dataset_session,
+                destination,
                 operations,
                 default_k=self.settings.k_anonymization.default_k,
                 representative=self.settings.k_anonymization.numeric_representative,
                 enable_l_diversity=self.settings.k_anonymization.enable_l_diversity,
                 default_l=self.settings.k_anonymization.default_l,
                 l_variant=self.settings.k_anonymization.l_diversity_variant,
+                overwrite=destination.exists(),
             )
+            execution = outcome.execution
         except LDiversityViolationError as error:
             report_path = self._save_l_failure_report(error.report, destination)
             details = str(error)
@@ -958,12 +982,6 @@ class TableViewer(tk.Tk):
             messagebox.showerror(
                 "Невозможно выполнить операцию", str(error), parent=self
             )
-            return
-
-        try:
-            save_csv(execution.dataframe, destination)
-        except (OSError, ValueError) as error:
-            messagebox.showerror("Ошибка сохранения CSV", str(error), parent=self)
             return
 
         self._show_anonymized_result(execution.dataframe, destination)

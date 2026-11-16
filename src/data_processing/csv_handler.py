@@ -1,4 +1,6 @@
 import csv
+import os
+import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -40,4 +42,23 @@ def save_csv(dataframe: pd.DataFrame, file_path: str | Path) -> None:
     path = Path(file_path)
     if not path.parent.exists():
         raise FileNotFoundError(f"Папка для сохранения не существует: {path.parent}")
-    dataframe.to_csv(path, index=False, encoding="utf-8-sig")
+
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8-sig",
+            newline="",
+            suffix=path.suffix or ".csv",
+            prefix=f".{path.stem}.",
+            dir=path.parent,
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            dataframe.to_csv(temporary_file, index=False)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()

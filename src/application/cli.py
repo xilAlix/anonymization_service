@@ -15,16 +15,13 @@ from application.anonymization_workflow import (
     K_ANONYMITY,
     REMOVE_DIRECT_IDENTIFIERS,
     TOKENIZE_DIRECT_IDENTIFIERS,
-    apply_anonymization_operations,
-    anonymize_manual_direct_identifiers,
-    remove_manual_direct_identifiers,
 )
 from data_processing.attribute_classifier import (
     ROLE_LABELS,
     classify_attributes,
     role_labels,
 )
-from data_processing.csv_handler import load_csv, save_csv
+from data_processing.csv_handler import load_csv
 from data_processing.schema_inspector import ColumnTypeResult, analyze_column_types
 from data_processing.quasi_identifier_analyzer import suggest_quasi_identifier_groups
 from infrastructure.attribute_profile_store import (
@@ -40,11 +37,12 @@ from infrastructure.attribute_profile_store import (
     save_quasi_identifier_correlation_blocks,
 )
 from infrastructure.settings_manager import DEFAULT_SETTINGS_PATH, load_settings
-from application.analysis_workflow import run_analysis, export_analysis_results
+from application.analysis_workflow import export_analysis_results
+from application.service import analyze_session_source, execute_anonymization_for_session
+from application.session_workflow import DatasetSession
 from data_analysis.descriptive_statistics import detect_date_format
 from application.k_anonymization_workflow import (
     LDiversityViolationError,
-    execute_k_anonymization,
     evaluate_current_k,
     evaluate_current_l,
     save_k_anonymity_report,
@@ -416,6 +414,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _print_session_evaluation(outcome) -> None:
+    release = outcome.release_check
+    print(f"Оценка приватности: {release['status_label']} ({release['status']}).")
+    for check in release.get("checks", []):
+        if check.get("status") != "passed":
+            print(f"  {check.get('check')}: {check.get('details')}")
+    summary = outcome.utility.summary
+    print(
+        "Оценка полезности: "
+        f"общих атрибутов={summary['common_columns']}, "
+        f"числовых={summary['numeric_columns']}, "
+        f"категориальных/прочих={summary['categorical_columns']}."
+    )
+
+
 def run_cli(arguments: list[str]) -> int:
     parser = build_parser()
     args = parser.parse_args(arguments)
@@ -460,9 +473,9 @@ def run_cli(arguments: list[str]) -> int:
                     )
                 date_formats[column] = detected_format
 
-            results = run_analysis(
-                dataframe,
-                input_path,
+            session = DatasetSession.start(input_path, dataframe)
+            results = analyze_session_source(
+                session,
                 profile_path=PROFILE_PATH,
                 date_formats=date_formats,
             )
@@ -792,24 +805,37 @@ def run_cli(arguments: list[str]) -> int:
             l_variant = args.l_variant or settings.k_anonymization.l_diversity_variant
             if k_value < 2:
                 raise ValueError("k должно быть не меньше 2.")
+
+            report_path = (
+                Path(args.report_json).resolve()
+                if args.report_json is not None
+                else output_path.with_name(output_path.stem + "_k_report.json")
+            )
+            if report_path in {input_path, output_path}:
+                raise ValueError("Путь отчёта не должен совпадать с исходным или выходным CSV.")
+            if report_path.exists() and not args.overwrite:
+                raise FileExistsError(f"Файл отчёта уже существует: {report_path}. Используй --overwrite.")
+
             dataframe = load_csv(input_path)
-            result_dataframe, report = execute_k_anonymization(
-                dataframe,
-                input_path,
+            session = DatasetSession.start(input_path, dataframe)
+            outcome = execute_anonymization_for_session(
+                session,
+                output_path,
+                [K_ANONYMITY],
                 default_k=k_value,
                 representative=representative,
-                profile_path=PROFILE_PATH,
                 enable_l_diversity=enable_l_diversity,
                 default_l=l_value,
                 l_variant=l_variant,
+                profile_path=PROFILE_PATH,
+                overwrite=args.overwrite,
             )
-            report_path = args.report_json or output_path.with_name(output_path.stem + "_k_report.json")
-            if report_path.exists() and not args.overwrite:
-                raise FileExistsError(f"Файл отчёта уже существует: {report_path}. Используй --overwrite.")
-            save_csv(result_dataframe, output_path)
+            report = outcome.execution.k_report
+            if report is None:
+                raise RuntimeError("Отчёт k-анонимизации не сформирован.")
             save_k_anonymity_report(report, report_path)
             print(f"k-анонимизация выполнена. Строк: {len(dataframe)}; столбцов: {len(dataframe.columns)}.")
-            print(f"Значение k по умолчанию: {k_value}; представитель: {representative}.")
+            print(f"Значение k: {k_value}; представитель: {representative}.")
             for item in report["profiles"]:
                 print(
                     f"{item['group_name']}: k={item['required_k']}, "
@@ -817,23 +843,10 @@ def run_cli(arguments: list[str]) -> int:
                     f"классов={item['equivalence_class_count']}, "
                     f"статус={'выполнено' if item['satisfied'] else 'не выполнено'}"
                 )
-            print("Блоки обработки:")
-            for block in report["components"]:
-                print(
-                    f"  {block['component_id']} | {block['algorithm']} | "
-                    f"k={block['required_k']} | кластеры={block['cluster_count']} | "
-                    f"столбцы={', '.join(block['attributes'])}"
-                )
             print(f"Результат: {output_path}")
             print(f"Подробный отчёт: {report_path}")
-            if report.get("l_diversity", {}).get("status") == "satisfied":
-                print(
-                    f"l-разнообразие подтверждено: l={l_value}, "
-                    f"вариант={l_variant}, проверок={report['l_diversity']['check_count']}."
-                )
-            else:
-                print("Важно: l-разнообразие в этом запуске не проверялось.")
-            print("Важно: k-анонимность и l-разнообразие не гарантируют t-близость или дифференциальную приватность.")
+            _print_session_evaluation(outcome)
+            print("Важно: k-анонимность и l-разнообразие не гарантируют невозможность повторной идентификации.")
             return 0
 
         if args.command == "anonymize-selected":
@@ -855,47 +868,46 @@ def run_cli(arguments: list[str]) -> int:
             if settings.anonymization.enable_k_anonymity:
                 selected_operations.append(K_ANONYMITY)
 
-            dataframe = load_csv(input_path)
-            execution = apply_anonymization_operations(
-                dataframe,
-                input_path,
-                selected_operations,
-                profile_path=PROFILE_PATH,
-                default_k=(
-                    args.k if args.k is not None
-                    else settings.k_anonymization.default_k
-                ),
-                representative=(
-                    args.representative
-                    or settings.k_anonymization.numeric_representative
-                ),
-                enable_l_diversity=(
-                    (settings.k_anonymization.enable_l_diversity if args.enable_l_diversity is None else args.enable_l_diversity)
-                    or args.l is not None
-                    or args.l_variant is not None
-                ),
-                default_l=(args.l if args.l is not None else settings.k_anonymization.default_l),
-                l_variant=(args.l_variant or settings.k_anonymization.l_diversity_variant),
+            enable_l_diversity = (
+                (settings.k_anonymization.enable_l_diversity if args.enable_l_diversity is None else args.enable_l_diversity)
+                or args.l is not None
+                or args.l_variant is not None
             )
-
+            k_value = args.k if args.k is not None else settings.k_anonymization.default_k
+            representative = args.representative or settings.k_anonymization.numeric_representative
+            l_value = args.l if args.l is not None else settings.k_anonymization.default_l
+            l_variant = args.l_variant or settings.k_anonymization.l_diversity_variant
             report_path = None
-            if execution.k_report is not None:
-                report_path = args.report_json or output_path.with_name(
-                    output_path.stem + "_k_report.json"
+            if K_ANONYMITY in selected_operations:
+                report_path = (
+                    Path(args.report_json).resolve()
+                    if args.report_json is not None
+                    else output_path.with_name(output_path.stem + "_k_report.json")
                 )
-                report_path = report_path.resolve()
-                if report_path == input_path:
-                    raise ValueError("Файл отчёта не должен совпадать с исходным CSV.")
-                if report_path == output_path:
-                    raise ValueError("Файл отчёта не должен совпадать с выходным CSV.")
+                if report_path in {input_path, output_path}:
+                    raise ValueError("Путь отчёта не должен совпадать с исходным или выходным CSV.")
                 if report_path.exists() and not args.overwrite:
                     raise FileExistsError(
                         f"Файл отчёта уже существует: {report_path}. Используй --overwrite."
                     )
-                execution.k_report["combined_operations"] = execution.operations
 
-            save_csv(execution.dataframe, output_path)
+            dataframe = load_csv(input_path)
+            session = DatasetSession.start(input_path, dataframe)
+            outcome = execute_anonymization_for_session(
+                session,
+                output_path,
+                selected_operations,
+                default_k=k_value,
+                representative=representative,
+                enable_l_diversity=enable_l_diversity,
+                default_l=l_value,
+                l_variant=l_variant,
+                profile_path=PROFILE_PATH,
+                overwrite=args.overwrite,
+            )
+            execution = outcome.execution
             if execution.k_report is not None and report_path is not None:
+                execution.k_report["combined_operations"] = execution.operations
                 save_k_anonymity_report(execution.k_report, report_path)
 
             operation_labels = {
@@ -910,25 +922,7 @@ def run_cli(arguments: list[str]) -> int:
             print(f"Результат сохранён: {output_path}")
             if report_path is not None:
                 print(f"Подробный отчёт: {report_path}")
-            if execution.k_report is not None:
-                l_report = execution.k_report.get("l_diversity", {})
-                if l_report.get("status") == "satisfied":
-                    print(
-                        f"l-разнообразие пройдено: l={l_report['l']}, "
-                        f"критерий={l_report['variant']}."
-                    )
-                elif l_report.get("status") == "not_checked":
-                    print("l-разнообразие не проверялось: выключено в настройках.")
-            elif settings.k_anonymization.enable_l_diversity:
-                print(
-                    "l-разнообразие не проверялось: k-анонимизация не включена "
-                    "в суммарный запуск."
-                )
-            else:
-                print(
-                    "l-разнообразие не проверялось: k-анонимизация не запускалась, "
-                    "а l-проверка выключена в настройках."
-                )
+            _print_session_evaluation(outcome)
             if TOKENIZE_DIRECT_IDENTIFIERS in execution.operations:
                 print(
                     "Важно: токенизация является псевдонимизацией и сама по себе "
@@ -947,28 +941,30 @@ def run_cli(arguments: list[str]) -> int:
                     "Для перезаписи укажи --overwrite."
                 )
 
+            operation = (
+                TOKENIZE_DIRECT_IDENTIFIERS
+                if args.command == "anonymize"
+                else REMOVE_DIRECT_IDENTIFIERS
+            )
             dataframe = load_csv(input_path)
-            if args.command == "anonymize":
-                result_dataframe, affected_columns = anonymize_manual_direct_identifiers(
-                    dataframe,
-                    input_path,
-                    PROFILE_PATH,
-                )
-                print("Токенизированные столбцы: " + ", ".join(affected_columns))
+            session = DatasetSession.start(input_path, dataframe)
+            outcome = execute_anonymization_for_session(
+                session,
+                output_path,
+                [operation],
+                profile_path=PROFILE_PATH,
+                overwrite=args.overwrite,
+            )
+            if operation == TOKENIZE_DIRECT_IDENTIFIERS:
+                print("Токенизированные столбцы: " + ", ".join(outcome.execution.affected_columns))
                 print(
                     "Важно: токенизация является псевдонимизацией и сама по себе "
                     "не гарантирует анонимность набора данных."
                 )
             else:
-                result_dataframe, affected_columns = remove_manual_direct_identifiers(
-                    dataframe,
-                    input_path,
-                    PROFILE_PATH,
-                )
-                print("Удалённые столбцы: " + ", ".join(affected_columns))
-
-            save_csv(result_dataframe, output_path)
+                print("Удалённые столбцы: " + ", ".join(outcome.execution.affected_columns))
             print(f"Результат сохранён: {output_path}")
+            _print_session_evaluation(outcome)
             return 0
 
     except LDiversityViolationError as error:
