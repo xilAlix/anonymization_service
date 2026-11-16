@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 from pandas.api.types import is_bool_dtype, is_datetime64_any_dtype, is_numeric_dtype
 
+from data_processing.semantic_types import numeric_values, resolve_semantic_type
+
 
 DATE_FORMATS: dict[str, str] = {
     "ГГГГ-ММ-ДД": "%Y-%m-%d",
@@ -117,6 +119,7 @@ def _sample_values(series: pd.Series, limit: int = 3) -> str:
 def classify_analysis_columns(
     dataframe: pd.DataFrame,
     date_formats: dict[str, str] | None = None,
+    semantic_types: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], dict[str, pd.Series], dict[str, int]]:
     """Определяет типы столбцов и возвращает преобразованные даты без изменения источника."""
     date_formats = date_formats or {}
@@ -134,6 +137,31 @@ def classify_analysis_columns(
     for original_column in dataframe.columns:
         column = str(original_column)
         series = dataframe[original_column]
+        semantic_type = resolve_semantic_type(column, series, semantic_types)
+
+        if semantic_type == "numeric":
+            numeric_values(series, column)
+            kinds[column] = "numeric"
+            continue
+
+        if semantic_type == "identifier":
+            kinds[column] = "identifier"
+            continue
+
+        if semantic_type == "categorical":
+            kinds[column] = "categorical"
+            continue
+
+        if semantic_type == "datetime" and column not in date_formats:
+            detected_format, ambiguous = detect_date_format(series)
+            if detected_format is None and series.notna().any():
+                reason = "формат неоднозначен" if ambiguous else "формат не распознан"
+                raise ValueError(
+                    f"Столбец «{column}» назначен типом «Дата и время», но {reason}. "
+                    "Укажите формат через «Операции» → «Назначить столбцы дат...»."
+                )
+            if detected_format is not None:
+                date_formats = {**date_formats, column: detected_format}
 
         if column in date_formats:
             date_format = date_formats[column]
@@ -151,6 +179,30 @@ def classify_analysis_columns(
             date_errors[column] = invalid_count
             continue
 
+        if semantic_type == "datetime":
+            if is_datetime64_any_dtype(series.dtype):
+                parsed = pd.to_datetime(series, errors="coerce")
+                detected_format = None
+                ambiguous = False
+            else:
+                detected_format, ambiguous = detect_date_format(series)
+                if detected_format is None:
+                    reason = "формат неоднозначен" if ambiguous else "формат не распознан"
+                    raise ValueError(
+                        f"Столбец «{column}» назначен типом «Дата/время», но {reason}. "
+                        "Откройте «Операции» → «Назначить столбцы дат...» и задайте формат."
+                    )
+                parsed = pd.to_datetime(
+                    series.astype("string").str.strip(),
+                    format=detected_format,
+                    errors="coerce",
+                    exact=True,
+                )
+            kinds[column] = "date"
+            parsed_dates[column] = parsed
+            date_errors[column] = int((series.notna() & parsed.isna()).sum())
+            continue
+
         if is_datetime64_any_dtype(series.dtype):
             parsed = pd.to_datetime(series, errors="coerce")
             kinds[column] = "date"
@@ -162,7 +214,7 @@ def classify_analysis_columns(
             kinds[column] = "categorical"
             continue
 
-        if is_numeric_dtype(series.dtype):
+        if semantic_type == "numeric" or is_numeric_dtype(series.dtype):
             kinds[column] = "numeric"
             continue
 
@@ -272,7 +324,7 @@ def calculate_descriptive_statistics(
         metrics["Пропуски, %"] = missing_percent
 
         if kind == "numeric":
-            values = source.dropna()
+            values = numeric_values(source, column).dropna()
             n = len(values)
             metrics["Количество непустых значений (n)"] = n
             metrics["Уникальные значения"] = int(values.nunique(dropna=True))
@@ -303,6 +355,11 @@ def calculate_descriptive_statistics(
                     metrics["Асимметрия"] = float(values.skew())
                 if n >= 4 and values.nunique() > 1:
                     metrics["Эксцесс (Фишера)"] = float(values.kurt())
+
+        elif kind == "identifier":
+            values = source.dropna()
+            metrics["Количество непустых значений (n)"] = int(len(values))
+            metrics["Уникальные значения"] = int(values.nunique(dropna=True))
 
         elif kind == "categorical":
             values = source.dropna()

@@ -6,8 +6,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from data_processing.semantic_types import numeric_values
+from data_analysis.descriptive_statistics import detect_date_format
 
-def parse_date_value(value: Any) -> pd.Timestamp:
+
+def parse_date_value(value: Any, date_format: str | None = None) -> pd.Timestamp:
+    if date_format:
+        return pd.to_datetime(value, format=date_format, errors="coerce", exact=True)
     text = str(value).strip()
     if len(text) >= 10 and text[0:4].isdigit() and text[4] in "-/" and text[7] in "-/":
         return pd.to_datetime(value, errors="coerce", dayfirst=False)
@@ -22,14 +27,21 @@ class ColumnMetric:
     scale: float = 1.0
     minimum: float | None = None
     maximum: float | None = None
+    date_format: str | None = None
 
 
 class MixedRecordDistance:
-    def __init__(self, dataframe: pd.DataFrame, columns: list[str]):
+    def __init__(
+        self,
+        dataframe: pd.DataFrame,
+        columns: list[str],
+        semantic_types: dict[str, str] | None = None,
+    ):
         if not columns:
             raise ValueError("Для микроагрегации не выбраны атрибуты.")
         self.dataframe = dataframe
         self.columns = list(columns)
+        self.semantic_types = semantic_types or {}
         self.metrics = [self._build_metric(column) for column in self.columns]
         self.numeric_only = all(metric.kind == "numeric" for metric in self.metrics)
         self.values = {
@@ -53,24 +65,75 @@ class MixedRecordDistance:
 
     def _build_metric(self, column: str) -> ColumnMetric:
         series = self.dataframe[column]
+        semantic_type = self.semantic_types.get(column, "auto")
+        if semantic_type in {"categorical", "identifier"}:
+            return ColumnMetric(column, "categorical")
+        if semantic_type == "datetime":
+            date_format = None
+            if pd.api.types.is_datetime64_any_dtype(series.dtype):
+                parsed = pd.to_datetime(series, errors="coerce")
+            else:
+                date_format, ambiguous = detect_date_format(series)
+                if date_format is None:
+                    reason = "неоднозначен" if ambiguous else "не распознан"
+                    raise ValueError(
+                        f"Столбец «{column}» назначен типом «Дата/время», но формат {reason}. "
+                        "Для k-анонимизации используйте однозначный формат даты."
+                    )
+                parsed = pd.to_datetime(
+                    series.astype("string").str.strip(),
+                    format=date_format,
+                    errors="coerce",
+                    exact=True,
+                )
+            invalid_count = int((series.notna() & parsed.isna()).sum())
+            if invalid_count:
+                raise ValueError(
+                    f"Столбец «{column}» назначен типом «Дата/время», "
+                    f"но {invalid_count} непустых значений не удалось распознать."
+                )
+            numbers = parsed.dropna().astype("int64").to_numpy(dtype=float)
+            spread = float(np.quantile(numbers, 0.75) - np.quantile(numbers, 0.25)) if len(numbers) else 1.0
+            if not np.isfinite(spread) or spread <= 0:
+                spread = float(np.max(numbers) - np.min(numbers)) if len(numbers) else 1.0
+            return ColumnMetric(
+                column, "date", None, spread if spread > 0 else 1.0, date_format=date_format
+            )
+
         normalized_name = column.casefold().replace("-", "_").replace(" ", "_")
         name_tokens = set(normalized_name.replace(".", "_").split("_"))
         identifier_like_numeric = bool(name_tokens & {
             "postal", "postcode", "postcode", "zip", "pin", "pincode",
             "id", "identifier", "account", "passport", "phone", "telephone",
         })
-        numeric_candidate = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan)
+        if semantic_type == "numeric":
+            numeric_candidate = numeric_values(series, column).replace(
+                [np.inf, -np.inf], np.nan
+            )
+        else:
+            numeric_candidate = pd.to_numeric(series, errors="coerce").replace(
+                [np.inf, -np.inf], np.nan
+            )
         non_missing_count = int(series.notna().sum())
         numeric_ratio = (
             float(numeric_candidate.notna().sum()) / non_missing_count
             if non_missing_count else 0.0
         )
+        if semantic_type == "numeric" and non_missing_count and numeric_ratio < 1.0:
+            raise ValueError(
+                f"Столбец «{column}» назначен числовым, но содержит значения, "
+                "которые нельзя преобразовать в число."
+            )
         is_numeric = (
-            not identifier_like_numeric
-            and not pd.api.types.is_bool_dtype(series.dtype)
-            and (
-                pd.api.types.is_numeric_dtype(series.dtype)
-                or numeric_ratio >= 0.9
+            semantic_type == "numeric"
+            or (
+                semantic_type == "auto"
+                and not identifier_like_numeric
+                and not pd.api.types.is_bool_dtype(series.dtype)
+                and (
+                    pd.api.types.is_numeric_dtype(series.dtype)
+                    or numeric_ratio >= 0.9
+                )
             )
         )
         if is_numeric:
@@ -89,12 +152,25 @@ class MixedRecordDistance:
             return ColumnMetric(column, "numeric", median, scale)
 
         if self._is_date_series(series):
-            parsed = pd.to_datetime(series, errors="coerce", dayfirst=True)
-            numbers = parsed.dropna().astype("int64").to_numpy(dtype=float)
-            spread = float(np.quantile(numbers, 0.75) - np.quantile(numbers, 0.25)) if len(numbers) else 1.0
-            if not np.isfinite(spread) or spread <= 0:
-                spread = float(np.max(numbers) - np.min(numbers)) if len(numbers) else 1.0
-            return ColumnMetric(column, "date", None, spread if spread > 0 else 1.0)
+            date_format, ambiguous = detect_date_format(series)
+            if date_format is not None:
+                parsed = pd.to_datetime(
+                    series.astype("string").str.strip(),
+                    format=date_format,
+                    errors="coerce",
+                    exact=True,
+                )
+                invalid_count = int((series.notna() & parsed.isna()).sum())
+                if invalid_count == 0:
+                    numbers = parsed.dropna().astype("int64").to_numpy(dtype=float)
+                    spread = float(np.quantile(numbers, 0.75) - np.quantile(numbers, 0.25)) if len(numbers) else 1.0
+                    if not np.isfinite(spread) or spread <= 0:
+                        spread = float(np.max(numbers) - np.min(numbers)) if len(numbers) else 1.0
+                    return ColumnMetric(
+                        column, "date", None, spread if spread > 0 else 1.0, date_format=date_format
+                    )
+            elif ambiguous:
+                return ColumnMetric(column, "categorical")
 
         return ColumnMetric(column, "categorical")
 
@@ -119,7 +195,8 @@ class MixedRecordDistance:
         value = self.values[column][index]
         if self._missing(value):
             return None
-        parsed = parse_date_value(value)
+        metric = next(item for item in self.metrics if item.name == column)
+        parsed = parse_date_value(value, metric.date_format)
         if pd.isna(parsed):
             return None
         return int(parsed.value)
@@ -176,7 +253,7 @@ class MixedRecordDistance:
                 numeric = float(value)
                 distances.append(min(abs(numeric - float(target)) / metric.scale, 1.0))
             elif metric.kind == "date":
-                parsed = parse_date_value(value)
+                parsed = parse_date_value(value, metric.date_format)
                 if pd.isna(parsed):
                     distances.append(1.0)
                 else:
@@ -213,8 +290,8 @@ class MixedRecordDistance:
             elif metric.kind == "numeric":
                 distances.append(min(abs(float(left) - float(right)) / metric.scale, 1.0))
             elif metric.kind == "date":
-                left_date = parse_date_value(left)
-                right_date = parse_date_value(right)
+                left_date = parse_date_value(left, metric.date_format)
+                right_date = parse_date_value(right, metric.date_format)
                 if pd.isna(left_date) or pd.isna(right_date):
                     distances.append(1.0)
                 else:

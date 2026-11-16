@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
-from pandas.api.types import is_bool_dtype, is_numeric_dtype
+from pandas.api.types import is_bool_dtype
 
 
 def calculate_correlations(
@@ -16,7 +16,6 @@ def calculate_correlations(
         str(column)
         for column in dataframe.columns
         if column_kinds.get(str(column)) == "numeric"
-        and is_numeric_dtype(dataframe[column].dtype)
         and not is_bool_dtype(dataframe[column].dtype)
     ]
 
@@ -25,7 +24,10 @@ def calculate_correlations(
         empty.index.name = "Атрибут"
         return empty.copy(), empty.copy(), empty.copy()
 
-    numeric = dataframe.loc[:, numeric_columns]
+    numeric = pd.DataFrame(
+        {column: pd.to_numeric(dataframe[column], errors="coerce") for column in numeric_columns},
+        index=dataframe.index,
+    )
     size = len(numeric_columns)
     pearson = pd.DataFrame(index=numeric_columns, columns=numeric_columns, dtype=float)
     spearman = pd.DataFrame(index=numeric_columns, columns=numeric_columns, dtype=float)

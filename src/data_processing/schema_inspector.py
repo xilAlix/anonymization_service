@@ -2,6 +2,8 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from data_processing.semantic_types import suggest_semantic_type
+
 
 @dataclass(frozen=True)
 class ColumnTypeResult:
@@ -11,6 +13,7 @@ class ColumnTypeResult:
     non_null_count: int | None
     unique_percent: float | None
     is_nominal: bool | None
+    suggested_semantic_type: str
 
 
 def analyze_column_types(
@@ -47,6 +50,7 @@ def analyze_column_types(
                 non_null_count=non_null_count,
                 unique_percent=unique_percent,
                 is_nominal=is_nominal,
+                suggested_semantic_type=suggest_semantic_type(str(column), dataframe[column]),
             )
         )
 

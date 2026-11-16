@@ -22,6 +22,7 @@ from infrastructure.attribute_profile_store import (
     DEFAULT_PROFILE_PATH,
     load_manual_role_overrides,
     load_quasi_identifier_groups,
+    load_semantic_types,
 )
 
 
@@ -55,6 +56,7 @@ def prepare_anonymization_plan(
         raise ValueError("Токенизация и удаление прямых идентификаторов являются альтернативными операциями.")
 
     roles = load_manual_role_overrides(session.source_path, profile_path)
+    semantic_types = load_semantic_types(session.source_path, profile_path)
     direct = [
         column for column, assigned in roles.items()
         if "direct_identifier" in assigned and column in session.source_dataframe.columns
@@ -122,6 +124,7 @@ def prepare_anonymization_plan(
     return {
         "dataset_id": session.dataset_id,
         "source_name": session.source_path.name,
+        "semantic_types": semantic_types,
         "rows": len(session.source_dataframe),
         "columns": len(session.source_dataframe.columns),
         "operations": list(operations),
@@ -198,6 +201,7 @@ def execute_anonymization_for_session(
         profile_path=profile_path,
     )
     roles = load_manual_role_overrides(session.source_path, profile_path)
+    semantic_types = load_semantic_types(session.source_path, profile_path)
     excluded = [
         column for column, assigned in roles.items()
         if "direct_identifier" in assigned and column in session.source_dataframe.columns
@@ -206,6 +210,7 @@ def execute_anonymization_for_session(
         session.source_dataframe,
         execution.dataframe,
         excluded_columns=excluded,
+        semantic_types=semantic_types,
     )
     save_csv(execution.dataframe, output_path)
     session.set_result(

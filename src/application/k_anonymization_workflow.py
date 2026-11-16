@@ -15,6 +15,7 @@ from infrastructure.attribute_profile_store import (
     load_quasi_identifier_correlation_blocks,
     load_quasi_identifier_groups,
     load_quasi_identifier_hierarchies,
+    load_semantic_types,
 )
 
 
@@ -166,6 +167,7 @@ def execute_k_anonymization(
     default_l: int = 2,
     l_variant: str = "both",
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
+    semantic_types = load_semantic_types(source_csv_path, profile_path)
     profiles = load_quasi_identifier_groups(source_csv_path, profile_path)
     hierarchies = load_quasi_identifier_hierarchies(source_csv_path, profile_path)
     correlation_blocks = load_quasi_identifier_correlation_blocks(source_csv_path, profile_path)
@@ -176,6 +178,7 @@ def execute_k_anonymization(
         representative=representative,
         hierarchies=hierarchies,
         correlation_blocks=correlation_blocks,
+        semantic_types=semantic_types,
     )
     if enable_l_diversity:
         overrides = load_manual_role_overrides(source_csv_path, profile_path)

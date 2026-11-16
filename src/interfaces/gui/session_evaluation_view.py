@@ -15,6 +15,12 @@ STATUS_PRESENTATION = {
     "blocked": ("Передачу не рекомендуется выполнять", "#991B1B", "#FEE2E2"),
 }
 
+CHECK_STATUS_PRESENTATION = {
+    "passed": ("Пройдена", "#166534", "#DCFCE7"),
+    "warning": ("Предупреждение", "#92400E", "#FEF3C7"),
+    "blocked": ("Блокировка", "#991B1B", "#FEE2E2"),
+}
+
 
 class SessionEvaluationView(ttk.Frame):
     def __init__(self, parent: tk.Misc, session: DatasetSession):
@@ -63,30 +69,16 @@ class SessionEvaluationView(ttk.Frame):
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True)
 
-        checks_frame = ttk.Frame(notebook)
+        checks_frame = ttk.Frame(notebook, padding=6)
         notebook.add(checks_frame, text="Приватность")
-        checks = release.get("checks", [])
-        checks_frame.columnconfigure(0, weight=1)
-        checks_frame.rowconfigure(0, weight=1)
-        checks_df = pd.DataFrame(
-            [
-                {
-                    "Проверка": item.get("check", "—"),
-                    "Статус": self._status_label(item.get("status")),
-                    "Результат": item.get("details", "—"),
-                }
-                for item in checks
-            ],
-            columns=["Проверка", "Статус", "Результат"],
-        )
-        DataFrameTable(checks_frame, checks_df, include_index=False).pack(fill="both", expand=True)
+        self._build_check_cards(checks_frame, release.get("checks", []))
         limitation = ttk.Label(
             checks_frame,
             text="Проверка не анализирует внешние источники и не гарантирует невозможность повторной идентификации.",
             wraplength=1050,
             foreground="#667085",
         )
-        limitation.pack(anchor="w", pady=(6, 0))
+        limitation.pack(anchor="w", pady=(7, 0))
 
         attributes_frame = ttk.Frame(notebook)
         notebook.add(attributes_frame, text="Изменения атрибутов")
@@ -115,6 +107,84 @@ class SessionEvaluationView(ttk.Frame):
                 foreground="#667085",
             )
             excluded.pack(anchor="w", pady=(6, 0))
+
+    def _build_check_cards(self, parent: ttk.Frame, checks: list[dict]) -> None:
+        container = ttk.Frame(parent)
+        container.pack(fill="both", expand=True)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(0, weight=1)
+
+        canvas = tk.Canvas(container, highlightthickness=0, background="#F4F5F7")
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        cards = ttk.Frame(canvas)
+        window_id = canvas.create_window((0, 0), window=cards, anchor="nw")
+        cards.columnconfigure(0, weight=1)
+
+        def update_scroll_region(_event=None) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def update_width(event) -> None:
+            canvas.itemconfigure(window_id, width=event.width)
+            wrap = max(280, event.width - 210)
+            for label_widget in detail_labels:
+                label_widget.configure(wraplength=wrap)
+
+        detail_labels: list[tk.Label] = []
+        if not checks:
+            ttk.Label(cards, text="Нет данных о проверках приватности.", padding=12).grid(
+                row=0, column=0, sticky="w"
+            )
+        for index, item in enumerate(checks):
+            check_name = str(item.get("check", "Проверка"))
+            status_text, status_fg, status_bg = CHECK_STATUS_PRESENTATION.get(
+                item.get("status"), ("Не проверено", "#475467", "#EAECF0")
+            )
+            card = tk.Frame(cards, background="#FFFFFF", padx=12, pady=9, highlightthickness=1, highlightbackground="#E4E7EC")
+            card.grid(row=index, column=0, sticky="ew", pady=(0, 7))
+            card.columnconfigure(0, weight=1)
+
+            tk.Label(
+                card,
+                text=check_name,
+                background="#FFFFFF",
+                foreground="#202938",
+                font=("Segoe UI", 10, "bold"),
+                anchor="w",
+            ).grid(row=0, column=0, sticky="ew")
+            tk.Label(
+                card,
+                text=status_text,
+                background=status_bg,
+                foreground=status_fg,
+                padx=7,
+                pady=2,
+                font=("Segoe UI", 9, "bold"),
+            ).grid(row=0, column=1, sticky="e", padx=(10, 0))
+            details = tk.Label(
+                card,
+                text=str(item.get("details", "—")),
+                background="#FFFFFF",
+                foreground="#475467",
+                justify="left",
+                anchor="w",
+                wraplength=820,
+                font=("Segoe UI", 9),
+            )
+            details.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 0))
+            detail_labels.append(details)
+
+        cards.bind("<Configure>", update_scroll_region)
+        canvas.bind("<Configure>", update_width)
+
+        def on_mousewheel(event) -> None:
+            if getattr(event, "delta", 0):
+                canvas.yview_scroll(int(-event.delta / 120), "units")
+
+        canvas.bind_all("<MouseWheel>", on_mousewheel, add="+")
 
     @staticmethod
     def _status_label(status: str | None) -> str:

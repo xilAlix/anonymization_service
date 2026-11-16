@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from data_processing.attribute_classifier import ROLE_LABELS
+from data_processing.semantic_types import validate_semantic_types
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -96,6 +97,7 @@ def _schema_signature(csv_path: str | Path) -> str | None:
 
 def _profile_referenced_columns(profile: dict) -> set[str]:
     columns = set(profile.get("manual_overrides", {}))
+    columns.update(profile.get("semantic_types", {}))
     columns.update(profile.get("generalization_hierarchies", {}))
     for group in profile.get("quasi_identifier_groups", []):
         if isinstance(group, dict):
@@ -113,14 +115,14 @@ def dataset_profile_key(csv_path: str | Path) -> str:
 
 def _read_registry(path: Path) -> dict:
     if not path.exists():
-        return {"format_version": 3, "datasets": {}}
+        return {"format_version": 4, "datasets": {}}
     try:
         registry = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ValueError(f"Не удалось прочитать профили атрибутов {path}: {error}") from error
     if not isinstance(registry, dict) or not isinstance(registry.get("datasets", {}), dict):
         raise ValueError("Файл профилей атрибутов имеет некорректную структуру.")
-    registry["format_version"] = max(int(registry.get("format_version", 1)), 3)
+    registry["format_version"] = max(int(registry.get("format_version", 1)), 4)
     registry.setdefault("datasets", {})
     for dataset_key, dataset_profile in registry["datasets"].items():
         if not isinstance(dataset_profile, dict):
@@ -242,7 +244,7 @@ def _get_or_create_dataset(registry: dict, csv_path: str | Path) -> dict:
     schema = _schema_signature(csv_path)
     if schema:
         dataset["schema_signature"] = schema
-    registry["format_version"] = 3
+    registry["format_version"] = 4
     return dataset
 
 
@@ -302,6 +304,58 @@ def save_manual_role_overrides(
     _remove_empty_dataset(registry, dataset)
     _write_registry(path, registry)
 
+
+
+def load_semantic_types(
+    csv_path: str | Path,
+    profile_path: str | Path = DEFAULT_PROFILE_PATH,
+) -> dict[str, str]:
+    registry = _read_registry(Path(profile_path))
+    dataset_profile = _dataset_profile(registry, csv_path)
+    stored = dataset_profile.get("semantic_types", {})
+    if not isinstance(stored, dict):
+        raise ValueError("Список семантических типов повреждён.")
+    return validate_semantic_types(stored)
+
+
+def save_semantic_types(
+    csv_path: str | Path,
+    semantic_types: dict[str, str],
+    available_columns: set[str] | list[str] | tuple[str, ...] | None = None,
+    profile_path: str | Path = DEFAULT_PROFILE_PATH,
+) -> None:
+    validated = validate_semantic_types(semantic_types)
+    if available_columns is not None:
+        available = set(map(str, available_columns))
+        missing = sorted(set(validated) - available)
+        if missing:
+            raise ValueError("Семантические типы ссылаются на отсутствующие столбцы: " + ", ".join(missing))
+    path = Path(profile_path)
+    registry = _read_registry(path)
+    dataset = _get_or_create_dataset(registry, csv_path)
+    if validated:
+        dataset["semantic_types"] = validated
+    else:
+        dataset.pop("semantic_types", None)
+    _remove_empty_dataset(registry, dataset)
+    _write_registry(path, registry)
+
+
+def save_semantic_type(
+    csv_path: str | Path,
+    column: str,
+    semantic_type: str,
+    profile_path: str | Path = DEFAULT_PROFILE_PATH,
+) -> None:
+    if not isinstance(column, str) or not column.strip():
+        raise ValueError("Название столбца не должно быть пустым.")
+    if semantic_type == "auto":
+        types = load_semantic_types(csv_path, profile_path)
+        types.pop(column, None)
+    else:
+        types = load_semantic_types(csv_path, profile_path)
+        types[column] = semantic_type
+    save_semantic_types(csv_path, types, profile_path=profile_path)
 
 def _validate_groups(groups: list[dict], available_columns: set[str] | None = None) -> list[dict]:
     if not isinstance(groups, list):

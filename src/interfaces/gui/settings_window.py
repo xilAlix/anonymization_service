@@ -123,18 +123,18 @@ class SettingsWindow(tk.Toplevel):
             lambda event: canvas.itemconfigure(content_window, width=event.width),
         )
 
-        ttk.Label(
+        analysis_title = ttk.Label(
             container,
             text="Анализ таблицы",
             font=("Segoe UI", 13, "bold"),
             style="Settings.TLabel",
-        ).pack(anchor="w", pady=(0, 3))
-        ttk.Label(
-            container,
-            text="Эти параметры помогают исследовать столбцы, но не заменяют ручную проверку ролей.",
-            style="Settings.Hint.TLabel",
-            wraplength=690,
-        ).pack(anchor="w", pady=(0, 12))
+        )
+        analysis_title.pack(anchor="w", pady=(0, 8))
+        ToolTip(
+            analysis_title,
+            "Эти настройки влияют на автоматические предложения по типам столбцов "
+            "и профилям квази-идентификаторов. Роли и семантические типы проверяются отдельно.",
+        )
 
         nominal_check = ttk.Checkbutton(
             container,
@@ -157,12 +157,6 @@ class SettingsWindow(tk.Toplevel):
             style="Settings.TCheckbutton",
         )
         qi_groups_check.pack(anchor="w", pady=(10, 0))
-        ttk.Label(
-            container,
-            text="Автоматически предлагает черновые группы. Редактор QI доступен в меню «Операции» и для ручного создания групп.",
-            style="Settings.Hint.TLabel",
-            wraplength=680,
-        ).pack(anchor="w", padx=(24, 0), pady=(2, 0))
         ToolTip(
             qi_groups_check,
             "При классификации таблицы формирует предполагаемые профили внешней "
@@ -194,12 +188,6 @@ class SettingsWindow(tk.Toplevel):
             "столбец считается номинальным. Поле остаётся видимым, но становится "
             "неактивным, если автоматическое определение номинальности выключено."
         )
-        ttk.Label(
-            self.threshold_frame,
-            text="Считает уникальные значения; не определяет смысл столбца.",
-            style="Settings.Hint.TLabel",
-            wraplength=650,
-        ).pack(side="bottom", anchor="w", pady=(3, 0))
         ToolTip(threshold_label, threshold_help)
         ToolTip(self.threshold_input, threshold_help)
 
@@ -224,20 +212,11 @@ class SettingsWindow(tk.Toplevel):
             anchor="w",
         )
         anonymization_title.pack(fill="x", pady=(0, 2))
-        tk.Label(
-            anonymization_frame,
-            text="Эти флажки определяют состав кнопки «Анонимизировать». Самостоятельные операции остаются в меню «Операции».",
-            background=ANONYMIZATION_BACKGROUND,
-            foreground="#526174",
-            font=("Segoe UI", 9),
-            anchor="w",
-            justify="left",
-            wraplength=650,
-        ).pack(fill="x", pady=(0, 8))
         ToolTip(
             anonymization_title,
-            "Отмеченные операции запускаются кнопкой «Анонимизировать» "
-            "на главном окне. Отдельные операции доступны в меню «Операции».",
+            "Отмеченные операции запускаются кнопкой «Анонимизировать». "
+            "Снятие флажка исключает операцию только из общего запуска; "
+            "отдельная операция остаётся доступной в меню «Операции».",
         )
 
         tokenize_check = self._create_anonymization_check(
@@ -246,12 +225,6 @@ class SettingsWindow(tk.Toplevel):
             self.tokenize_direct_identifiers,
             self._on_tokenization_selected,
         )
-        ttk.Label(
-            anonymization_frame,
-            text="Заменяет значения ID токенами; одинаковые значения в столбце получают одинаковый токен.",
-            style="Settings.Hint.TLabel",
-            wraplength=630,
-        ).pack(fill="x", padx=(24, 0), pady=(0, 2))
         ToolTip(
             tokenize_check,
             "Заменяет значения вручную назначенных прямых идентификаторов "
@@ -264,12 +237,6 @@ class SettingsWindow(tk.Toplevel):
             self.remove_direct_identifiers,
             self._on_removal_selected,
         )
-        ttk.Label(
-            anonymization_frame,
-            text="Удаляет целые столбцы с ролью прямого идентификатора.",
-            style="Settings.Hint.TLabel",
-            wraplength=630,
-        ).pack(fill="x", padx=(24, 0), pady=(0, 2))
         ToolTip(
             remove_check,
             "Удаляет целые столбцы с вручную назначенной ролью прямого "
@@ -282,12 +249,6 @@ class SettingsWindow(tk.Toplevel):
             "k-анонимизация по активным QI-профилям",
             self.enable_k_anonymity,
         )
-        ttk.Label(
-            anonymization_frame,
-            text="Обобщает активные QI-группы так, чтобы в каждой было не менее k строк.",
-            style="Settings.Hint.TLabel",
-            wraplength=630,
-        ).pack(fill="x", padx=(24, 0), pady=(0, 2))
         ToolTip(
             k_operation_check,
             "Включает k-анонимизацию в общий запуск кнопкой «Анонимизировать». "
@@ -328,12 +289,6 @@ class SettingsWindow(tk.Toplevel):
             justify="right",
         )
         self.default_k_input.grid(row=1, column=1, sticky="w", padx=(16, 0))
-        ttk.Label(
-            k_frame,
-            text="Минимум строк в каждой группе. Для отдельной QI-группы можно задать своё k.",
-            style="Settings.Hint.TLabel",
-            wraplength=650,
-        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
         ToolTip(
             self.default_k_input,
             "Минимальный размер каждой группы по умолчанию. Отдельный QI-профиль может переопределить это значение.",
@@ -355,12 +310,6 @@ class SettingsWindow(tk.Toplevel):
         self.representative_select.grid(
             row=3, column=1, sticky="w", padx=(16, 0), pady=(10, 0)
         )
-        ttk.Label(
-            k_frame,
-            text="Как заменить числовые значения внутри каждой группы.",
-            style="Settings.Hint.TLabel",
-            wraplength=650,
-        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(2, 0))
         ToolTip(
             self.representative_select,
             "Среднее, медиана или существующее значение одной из записей группы.",
@@ -375,15 +324,12 @@ class SettingsWindow(tk.Toplevel):
         self.l_diversity_check.grid(
             row=5, column=0, columnspan=2, sticky="w", pady=(16, 0)
         )
-        ttk.Label(
-            k_frame,
-            text="l не изменяет таблицу. Проверка выполняется только вместе с k. Если k не включена в суммарный запуск, l сработает при отдельном запуске k через меню «Операции».",
-            style="Settings.Hint.TLabel",
-            wraplength=650,
-        ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(2, 0))
         ToolTip(
             self.l_diversity_check,
-            "Проверяет вручную назначенные конфиденциальные поля после k-анонимизации. Не выполняет преобразований. Если проверка не пройдёт, CSV не сохраняется; рядом будет диагностический JSON с причиной.",
+            "Проверяет конфиденциальные атрибуты внутри классов после k-анонимизации. "
+            "При нескольких таких атрибутах выполняются индивидуальная, совместная и "
+            "условная проверки. l не преобразует данные; при нарушении обязательной "
+            "проверки результирующий CSV не сохраняется.",
         )
 
         tk.Label(
@@ -403,13 +349,6 @@ class SettingsWindow(tk.Toplevel):
         self.default_l_input.grid(
             row=7, column=1, sticky="w", padx=(16, 0), pady=(10, 0)
         )
-        l_value_hint = ttk.Label(
-            k_frame,
-            text="Порог разнообразия в каждой эквивалентной группе. Если l выше возможного разнообразия, запуск завершится отказом.",
-            style="Settings.Hint.TLabel",
-            wraplength=650,
-        )
-        l_value_hint.grid(row=8, column=0, columnspan=2, sticky="w", pady=(2, 0))
         self.l_entropy_hint_label = ttk.Label(
             k_frame,
             textvariable=self.l_entropy_hint,
@@ -422,7 +361,11 @@ class SettingsWindow(tk.Toplevel):
         self.default_l.trace_add("write", self._update_l_entropy_hint)
         self.l_diversity_variant.trace_add("write", self._update_l_entropy_hint)
         self._update_l_entropy_hint()
-        ToolTip(self.default_l_input, "l должно быть целым числом от 2. Чем выше l, тем строже проверка.")
+        ToolTip(
+            self.default_l_input,
+            "Минимальное разнообразие конфиденциальных значений. Для Entropy требуется "
+            "H(S) ≥ ln(l); значение порога показано под полем.",
+        )
 
         tk.Label(
             k_frame,
@@ -440,30 +383,12 @@ class SettingsWindow(tk.Toplevel):
         self.l_variant_select.grid(
             row=10, column=1, sticky="w", padx=(16, 0), pady=(10, 0)
         )
-        ttk.Label(
-            k_frame,
-            text="Distinct — число разных значений; Entropy — учитывает частоты. «Оба» требует прохождения двух критериев.",
-            style="Settings.Hint.TLabel",
-            wraplength=650,
-        ).grid(row=11, column=0, columnspan=2, sticky="w", pady=(2, 0))
         ToolTip(
             self.l_variant_select,
-            "Для Entropy применяется H(S) ≥ ln(l). При выборе «Оба» должны пройти и Distinct, и Entropy.",
+            "Distinct проверяет число различных значений. Entropy учитывает частоты "
+            "значений и требует H(S) ≥ ln(l). «Оба» означает, что должны пройти оба критерия.",
         )
 
-        multi_sensitive_hint = tk.Label(
-            k_frame,
-            text="Несколько конфиденциальных полей проверяются также с учётом значений остальных полей. Почти уникальные суммы или доходы могут разбить группу на одиночные записи и привести к отказу.",
-            background="#F0F3F7",
-            foreground="#7A5A24",
-            font=("Segoe UI", 9),
-            anchor="w",
-            justify="left",
-            wraplength=650,
-        )
-        multi_sensitive_hint.grid(
-            row=12, column=0, columnspan=2, sticky="ew", pady=(12, 0)
-        )
 
         buttons = ttk.Frame(shell, style="Settings.TFrame", padding=(18, 10, 18, 16))
         buttons.grid(row=1, column=0, columnspan=2, sticky="ew")

@@ -19,6 +19,8 @@ from data_processing.quasi_identifier_analyzer import suggest_quasi_identifier_g
 from infrastructure.attribute_profile_store import (
     load_manual_role_overrides,
     save_manual_role_overrides,
+    load_semantic_types,
+    save_semantic_types,
     load_quasi_identifier_groups,
     save_quasi_identifier_groups,
 )
@@ -73,7 +75,13 @@ class TableViewer(tk.Tk):
     def __init__(self, example_path: Path):
         super().__init__()
         self.example_path = example_path
-        self.short_example_path = Path(__file__).resolve().parents[3] / "data" / "synthetic" / "analysis_example_30.csv"
+        self.project_data_root = Path(__file__).resolve().parents[3] / "data" / "synthetic"
+        self.short_example_path = self.project_data_root / "analysis_example_30.csv"
+        self.demo_datasets = {
+            "retail": self.project_data_root / "retail_customers_orders_60.csv",
+            "finance": self.project_data_root / "financial_transactions_90.csv",
+            "hr": self.project_data_root / "employee_training_50.csv",
+        }
         self.manual_date_formats: dict[str, str] = {}
         self.result_tab: ttk.Frame | None = None
         self.analysis_tab: ttk.Frame | None = None
@@ -124,7 +132,7 @@ class TableViewer(tk.Tk):
         self.date_menu_index = 5
         operations_menu.add_separator()
         operations_menu.add_command(
-            label="Определить типы данных",
+            label="Типы данных и семантика атрибутов...",
             command=self.show_column_types,
             state="disabled",
         )
@@ -161,6 +169,20 @@ class TableViewer(tk.Tk):
             state="disabled",
         )
         self.k_anonymization_menu_index = 14
+        examples_menu = tk.Menu(operations_menu, tearoff=False)
+        examples_menu.add_command(
+            label="Клиенты и заказы (60 строк)",
+            command=lambda: self.open_demo_dataset("retail"),
+        )
+        examples_menu.add_command(
+            label="Финансовые операции (90 строк)",
+            command=lambda: self.open_demo_dataset("finance"),
+        )
+        examples_menu.add_command(
+            label="Сотрудники и обучение (50 строк)",
+            command=lambda: self.open_demo_dataset("hr"),
+        )
+        operations_menu.add_cascade(label="Дополнительные примеры", menu=examples_menu)
         menu_bar.add_cascade(label="Операции", menu=operations_menu)
         self.operations_menu = operations_menu
         self.config(menu=menu_bar)
@@ -412,9 +434,21 @@ class TableViewer(tk.Tk):
         except (OSError, ValueError, pd.errors.ParserError) as error:
             messagebox.showerror("Ошибка открытия короткого примера", str(error), parent=self)
 
+    def open_demo_dataset(self, dataset_key: str) -> None:
+        path = self.demo_datasets.get(dataset_key)
+        if path is None:
+            self.status.set("Неизвестный демонстрационный набор.")
+            return
+        try:
+            dataframe = load_csv(path)
+            self._show_dataframe(dataframe, path)
+            self.status.set(f"Загружен демонстрационный набор: {path.name}.")
+        except (OSError, ValueError, pd.errors.ParserError) as error:
+            messagebox.showerror("Ошибка открытия демонстрационного набора", str(error), parent=self)
+
     def configure_date_columns(self) -> None:
         if self.current_dataframe is None:
-            messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.", parent=self)
+            self.status.set("Сначала загрузите CSV-файл.")
             return
         dialog = DateColumnDialog(self, self.current_dataframe, self.manual_date_formats)
         self.wait_window(dialog)
@@ -430,7 +464,7 @@ class TableViewer(tk.Tk):
 
     def analyze_current_table(self) -> None:
         if self.current_dataframe is None or self.current_file_path is None:
-            messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.", parent=self)
+            self.status.set("Сначала загрузите CSV-файл.")
             return
 
         diagnostics = inspect_date_columns(self.current_dataframe)
@@ -439,14 +473,10 @@ class TableViewer(tk.Tk):
             if info.get("ambiguous") and column not in self.manual_date_formats
         ]
         if ambiguous:
-            messagebox.showwarning(
-                "Неоднозначный формат даты",
-                "Не удалось безопасно определить формат следующих столбцов: "
+            self.status.set(
+                "Неоднозначные даты обработаны как категории: "
                 + ", ".join(ambiguous)
-                + "\n\nСейчас они будут рассчитаны как категориальные. "
-                "Чтобы учитывать их как даты, откройте «Операции» → «Назначить столбцы дат...», "
-                "выберите формат и повторите анализ.",
-                parent=self,
+                + ". Для распознавания откройте «Операции» → «Назначить столбцы дат...»."
             )
 
         try:
@@ -506,10 +536,9 @@ class TableViewer(tk.Tk):
         except (OSError, ValueError) as error:
             messagebox.showerror("Ошибка экспорта анализа", str(error), parent=self)
             return
-        messagebox.showinfo(
-            "Результаты анализа сохранены",
-            "Созданы файлы:\n" + "\n".join(str(path) for path in outputs),
-            parent=self,
+        self.status.set(
+            "Результаты анализа сохранены: "
+            + ", ".join(path.name for path in outputs)
         )
 
     def open_settings(self) -> None:
@@ -533,18 +562,13 @@ class TableViewer(tk.Tk):
         self.status.set("Настройки анализа и анонимизации сохранены.")
 
     def show_column_types(self) -> None:
-        if self.current_dataframe is None:
-            messagebox.showwarning(
-                "Нет таблицы",
-                "Сначала загрузите CSV-файл.",
-            )
+        if self.current_dataframe is None or self.current_file_path is None:
+            self.status.set("Сначала загрузите CSV-файл.")
             return
 
-        if (
-            self.column_types_window is not None
-            and self.column_types_window.winfo_exists()
-        ):
-            self.column_types_window.destroy()
+        if self.column_types_window is not None and self.column_types_window.winfo_exists():
+            self.column_types_window.lift()
+            return
 
         analysis_settings = self.settings.data_type_analysis
         results = analyze_column_types(
@@ -554,12 +578,46 @@ class TableViewer(tk.Tk):
                 analysis_settings.nominal_unique_threshold_percent
             ),
         )
+        try:
+            semantic_types = load_semantic_types(self.current_file_path)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Ошибка чтения типов атрибутов", str(error), parent=self)
+            return
+
+        def persist_semantic_type(column: str, semantic_type: str) -> bool:
+            updated = dict(semantic_types)
+            if semantic_type == "auto":
+                updated.pop(column, None)
+            else:
+                updated[column] = semantic_type
+            try:
+                save_semantic_types(
+                    self.current_file_path,
+                    updated,
+                    available_columns=list(self.current_dataframe.columns),
+                )
+            except (OSError, ValueError) as error:
+                messagebox.showerror("Ошибка сохранения семантического типа", str(error), parent=self)
+                return False
+            semantic_types.clear()
+            semantic_types.update(updated)
+            type_label = {
+                "auto": "автоматический",
+                "numeric": "числовой",
+                "categorical": "категориальный",
+                "datetime": "дата и время",
+                "identifier": "идентификатороподобный",
+            }[semantic_type]
+            self.status.set(f"Для «{column}» сохранён семантический тип: {type_label}.")
+            return True
+
         self.column_types_window = ColumnTypesWindow(
             self,
             results,
             analysis_settings.detect_nominal_attributes,
+            semantic_types=semantic_types,
+            save_semantic_type=persist_semantic_type,
         )
-
 
     def _update_anonymization_controls(self) -> None:
         table_loaded = (
@@ -688,7 +746,7 @@ class TableViewer(tk.Tk):
 
     def run_k_anonymization(self) -> None:
         if self.current_dataframe is None or self.current_file_path is None:
-            messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.", parent=self)
+            self.status.set("Сначала загрузите CSV-файл.")
             return
         default_k = self.settings.k_anonymization.default_k
         k_value = simpledialog.askinteger(
@@ -756,41 +814,12 @@ class TableViewer(tk.Tk):
             return
 
         self._show_anonymized_result(result, destination)
-        report_path = self._offer_k_report(report, destination)
-        self.status.set(f"k-анонимизация завершена. Результат: {destination.name}")
-        profile_lines = [
-            f"{item['group_name']}: k={item['required_k']}, минимум в классе={item['minimum_equivalence_class_size']}"
-            for item in report["profiles"]
-        ]
-        l_status = report.get("l_diversity", {}).get("status")
-        if l_status == "satisfied":
-            l_message = (
-                f"\n\nПроверка l-разнообразия пройдена: "
-                f"l={report['l_diversity']['l']}, "
-                f"критерий={report['l_diversity']['variant']}."
-            )
-        elif l_status == "not_checked":
-            l_message = (
-                "\n\nПроверка l-разнообразия не выполнялась: "
-                "выключена в настройках."
-            )
-        else:
-            l_message = "\n\nСтатус l-проверки отсутствует в отчёте."
-        report_message = (
-            f"\n\nТехнический отчёт: {report_path}"
-            if report_path
-            else "\n\nJSON-отчёт не сохранялся. Он не нужен для загрузки CSV в аналитические алгоритмы."
+        self._offer_k_report(report, destination)
+        l_status = report.get("l_diversity", {}).get("status", "not_checked")
+        self.status.set(
+            f"k-анонимизация завершена: {len(report.get('profiles', []))} QI-профилей; "
+            f"l-проверка: {l_status}. Результат: {destination.name}"
         )
-        messagebox.showinfo(
-            "k-анонимизация завершена",
-            "CSV-таблица создана.\n\n"
-            + "\n".join(profile_lines)
-            + l_message
-            + f"\n\nРезультат CSV: {destination}"
-            + report_message,
-            parent=self,
-        )
-        self._show_l_diversity_diagnostics(report.get("l_diversity", {}))
 
     def _offer_k_report(self, report: dict, csv_path: Path) -> Path | None:
         should_save = messagebox.askyesno(
@@ -853,11 +882,9 @@ class TableViewer(tk.Tk):
             selected_operations.append(K_ANONYMITY)
 
         if not selected_operations:
-            messagebox.showwarning(
-                "Операции не выбраны",
-                "В настройках не выбрана ни одна операция для суммарной "
-                "анонимизации. Отдельные операции доступны в меню «Операции».",
-                parent=self,
+            self.status.set(
+                "Не выбраны операции для суммарной анонимизации. "
+                "Отдельные операции доступны в меню «Операции»."
             )
             return
 
@@ -923,7 +950,7 @@ class TableViewer(tk.Tk):
         aggregate: bool = False,
     ) -> None:
         if self.current_dataframe is None or self.current_file_path is None:
-            messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.", parent=self)
+            self.status.set("Сначала загрузите CSV-файл.")
             return
 
         output_path = filedialog.asksaveasfilename(
@@ -985,9 +1012,8 @@ class TableViewer(tk.Tk):
             return
 
         self._show_anonymized_result(execution.dataframe, destination)
-        report_path = None
         if execution.k_report is not None:
-            report_path = self._offer_k_report(execution.k_report, destination)
+            self._offer_k_report(execution.k_report, destination)
 
         operation_labels = {
             TOKENIZE_DIRECT_IDENTIFIERS: "токенизация прямых идентификаторов",
@@ -995,49 +1021,16 @@ class TableViewer(tk.Tk):
             K_ANONYMITY: "k-анонимизация",
         }
         operations_text = ", ".join(operation_labels[item] for item in execution.operations)
-        affected_text = ", ".join(execution.affected_columns) or "нет"
-        details = [
-            f"Выполненные операции: {operations_text}",
-            f"Обработанные столбцы: {affected_text}",
-            f"CSV для аналитики сохранён: {destination}",
-        ]
-        if execution.k_report is not None:
-            l_report = execution.k_report.get("l_diversity", {})
-            if l_report.get("status") == "satisfied":
-                details.append(
-                    f"Проверка l-разнообразия пройдена: l={l_report['l']}, "
-                    f"критерий={l_report['variant']}"
-                )
-            elif l_report.get("status") == "not_checked":
-                details.append(
-                    "Проверка l-разнообразия не выполнялась: выключена в настройках."
-                )
-            if report_path is not None:
-                details.append(f"Технический отчёт JSON: {report_path}")
-            else:
-                details.append("JSON-отчёт не сохранялся; для работы с CSV он не нужен.")
-        else:
-            if self.settings.k_anonymization.enable_l_diversity:
-                details.append(
-                    "Проверка l-разнообразия не выполнялась: k-анонимизация не входила "
-                    "в выбранные операции."
-                )
-            else:
-                details.append(
-                    "Проверка l-разнообразия не выполнялась: k-анонимизация не запускалась, "
-                    "а l-проверка выключена в настройках."
-                )
-        if TOKENIZE_DIRECT_IDENTIFIERS in execution.operations:
-            details.append(
-                "Токенизация является псевдонимизацией и сама по себе не гарантирует анонимность данных."
-            )
         completion_title = "Суммарная анонимизация завершена" if aggregate else "Операция завершена"
-        self.status.set(f"{completion_title}: {operations_text}. Результат: {destination.name}")
-        messagebox.showinfo(completion_title, "\n\n".join(details), parent=self)
+        status_detail = ""
         if execution.k_report is not None:
-            self._show_l_diversity_diagnostics(
-                execution.k_report.get("l_diversity", {})
-            )
+            l_status = execution.k_report.get("l_diversity", {}).get("status", "not_checked")
+            status_detail = f" Л-проверка: {l_status}."
+        if TOKENIZE_DIRECT_IDENTIFIERS in execution.operations:
+            status_detail += " Токенизация является псевдонимизацией."
+        self.status.set(
+            f"{completion_title}: {operations_text}.{status_detail} Результат: {destination.name}"
+        )
 
     def _show_l_diversity_diagnostics(self, report: dict) -> None:
         if report.get("status") not in {"satisfied", "failed", "not_evaluable"}:
@@ -1048,7 +1041,7 @@ class TableViewer(tk.Tk):
 
     def show_attribute_classification(self) -> None:
         if self.current_dataframe is None or self.current_file_path is None:
-            messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.")
+            self.status.set("Сначала загрузите CSV-файл.")
             return
 
         if (
@@ -1102,7 +1095,7 @@ class TableViewer(tk.Tk):
 
     def show_quasi_identifier_groups(self) -> None:
         if self.current_dataframe is None or self.current_file_path is None:
-            messagebox.showwarning("Нет таблицы", "Сначала загрузите CSV-файл.")
+            self.status.set("Сначала загрузите CSV-файл.")
             return
         if (
             self.quasi_identifier_groups_window is not None

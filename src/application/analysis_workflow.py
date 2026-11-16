@@ -13,6 +13,7 @@ from data_analysis.descriptive_statistics import (
 from infrastructure.attribute_profile_store import (
     DEFAULT_PROFILE_PATH,
     load_manual_role_overrides,
+    load_semantic_types,
 )
 
 
@@ -28,6 +29,7 @@ class AnalysisResults:
     date_errors: dict[str, int]
     source_rows: int
     source_columns: int
+    semantic_types: dict[str, str]
 
 
 def run_analysis(
@@ -41,6 +43,7 @@ def run_analysis(
         raise ValueError("Таблица не содержит столбцов для анализа.")
 
     manual_overrides = load_manual_role_overrides(csv_path, profile_path)
+    semantic_types = load_semantic_types(csv_path, profile_path)
     excluded_columns = [
         str(column)
         for column in dataframe.columns
@@ -60,6 +63,7 @@ def run_analysis(
     kinds, parsed_dates, date_errors = classify_analysis_columns(
         analysis_frame,
         date_formats=date_formats,
+        semantic_types=semantic_types,
     )
     statistics = calculate_descriptive_statistics(
         analysis_frame,
@@ -84,6 +88,7 @@ def run_analysis(
         date_errors=date_errors,
         source_rows=len(dataframe),
         source_columns=len(dataframe.columns),
+        semantic_types=semantic_types,
     )
 
 

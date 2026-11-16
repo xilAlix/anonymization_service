@@ -38,11 +38,8 @@ class ToolTip:
         if self._window is not None or not self.widget.winfo_exists():
             return
 
-        x = self.widget.winfo_rootx() + 12
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
         window = tk.Toplevel(self.widget)
         window.wm_overrideredirect(True)
-        window.wm_geometry(f"+{x}+{y}")
         window.configure(background="#FFFBEA")
         label = tk.Label(
             window,
@@ -58,6 +55,17 @@ class ToolTip:
             font=("Segoe UI", 9),
         )
         label.pack()
+        window.update_idletasks()
+        x = self.widget.winfo_rootx() + 12
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        width = window.winfo_reqwidth()
+        height = window.winfo_reqheight()
+        screen_width = self.widget.winfo_screenwidth()
+        screen_height = self.widget.winfo_screenheight()
+        x = min(max(4, x), max(4, screen_width - width - 4))
+        if y + height > screen_height - 4:
+            y = max(4, self.widget.winfo_rooty() - height - 6)
+        window.wm_geometry(f"+{x}+{y}")
         self._window = window
         self._label = label
 

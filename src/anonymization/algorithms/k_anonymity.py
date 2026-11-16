@@ -200,10 +200,12 @@ def _round_to_integer(value: float) -> int:
     return int(np.sign(value) * np.floor(abs(value) + 0.5))
 
 
-def _has_integer_semantics(series: pd.Series) -> bool:
+def _has_integer_semantics(series: pd.Series, forced_numeric: bool = False) -> bool:
     if pd.api.types.is_integer_dtype(series.dtype):
         return True
-    if not pd.api.types.is_float_dtype(series.dtype) or not series.isna().any():
+    if not forced_numeric and (
+        not pd.api.types.is_float_dtype(series.dtype) or not series.isna().any()
+    ):
         return False
     numeric = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
     if numeric.empty:
@@ -232,8 +234,13 @@ def _restore_numeric_series(
     values: list[Any],
     index: pd.Index,
     integer_semantics: bool,
+    force_numeric: bool = False,
 ) -> pd.Series:
     dtype = original.dtype
+    if force_numeric:
+        if integer_semantics:
+            return pd.Series(values, index=index, dtype="Int64")
+        return pd.Series(values, index=index, dtype="Float64")
     if integer_semantics:
         if pd.api.types.is_integer_dtype(dtype):
             integer_dtype = _nullable_integer_dtype(dtype)
@@ -266,6 +273,7 @@ def microaggregate_component(
     k: int,
     representative: str = "mean",
     hierarchies: dict[str, list[dict]] | None = None,
+    semantic_types: dict[str, str] | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     columns = list(component["columns"])
     missing = [column for column in columns if column not in dataframe.columns]
@@ -274,7 +282,8 @@ def microaggregate_component(
     if representative not in {"mean", "median", "medoid"}:
         raise ValueError("Представитель группы должен быть mean, median или medoid.")
 
-    distance = MixedRecordDistance(dataframe, columns)
+    semantic_types = semantic_types or {}
+    distance = MixedRecordDistance(dataframe, columns, semantic_types)
     row_indices = list(range(len(dataframe)))
     clusters = mdav_partition(
         row_indices,
@@ -299,7 +308,11 @@ def microaggregate_component(
     metric_by_column = {metric.name: metric for metric in distance.metrics}
     numeric_columns = [metric.name for metric in distance.metrics if metric.kind == "numeric"]
     integer_semantics = {
-        column: _has_integer_semantics(dataframe[column])
+        column: _has_integer_semantics(
+            pd.to_numeric(dataframe[column], errors="coerce")
+            if semantic_types.get(column) == "numeric"
+            else dataframe[column]
+        )
         for column in numeric_columns
     }
 
@@ -374,6 +387,7 @@ def microaggregate_component(
                 transformed_values[column],
                 dataframe.index,
                 integer_semantics[column],
+                force_numeric=semantic_types.get(column) == "numeric",
             )
         else:
             result[column] = pd.Series(
@@ -412,6 +426,7 @@ def anonymize_k_anonymity(
     representative: str = "mean",
     hierarchies: dict[str, list[dict]] | None = None,
     correlation_blocks: list[dict] | None = None,
+    semantic_types: dict[str, str] | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     if dataframe.empty:
         raise ValueError("Нельзя выполнить k-анонимизацию пустой таблицы.")
@@ -440,6 +455,7 @@ def anonymize_k_anonymity(
                 f"В QI-профиле «{profile['name']}» отсутствуют столбцы: {', '.join(missing)}"
             )
 
+    semantic_types = semantic_types or {}
     components = _connected_components(normalized_profiles, correlation_blocks or [])
     result = dataframe.copy(deep=True)
     component_reports: list[dict] = []
@@ -455,6 +471,7 @@ def anonymize_k_anonymity(
             component_k,
             representative,
             hierarchies,
+            semantic_types,
         )
         component_reports.append(component_report)
 
@@ -470,7 +487,7 @@ def anonymize_k_anonymity(
             "После преобразования не удалось подтвердить k-анонимность: " + details
         )
 
-    utility = _utility_report(dataframe, result)
+    utility = _utility_report(dataframe, result, semantic_types)
     report = {
         "status": "satisfied",
         "default_k": default_k,
@@ -492,11 +509,23 @@ def anonymize_k_anonymity(
     return result, report
 
 
-def _utility_report(original: pd.DataFrame, transformed: pd.DataFrame) -> dict:
+def _utility_report(
+    original: pd.DataFrame,
+    transformed: pd.DataFrame,
+    semantic_types: dict[str, str] | None = None,
+) -> dict:
+    semantic_types = semantic_types or {}
+
     def is_numeric_feature(column: str) -> bool:
+        semantic_type = semantic_types.get(column, "auto")
+        if semantic_type in {"categorical", "datetime", "identifier"}:
+            return False
         series = original[column]
         if pd.api.types.is_bool_dtype(series.dtype):
             return False
+        if semantic_type == "numeric":
+            converted = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan)
+            return bool(converted.notna().any())
         tokens = set(str(column).casefold().replace("-", "_").split("_"))
         if tokens & {"id", "identifier", "postal", "postcode", "zip", "pin", "pincode", "phone", "account", "passport"}:
             return False
@@ -548,8 +577,12 @@ def _utility_report(original: pd.DataFrame, transformed: pd.DataFrame) -> dict:
     for method in ("pearson", "spearman"):
         correlations[method] = {}
         if len(numeric_columns) >= 2:
-            before_corr = before_frame.corr(method=method)
-            after_corr = after_frame.corr(method=method)
+            if method == "spearman":
+                before_corr = before_frame.rank(method="average").corr(method="pearson")
+                after_corr = after_frame.rank(method="average").corr(method="pearson")
+            else:
+                before_corr = before_frame.corr(method="pearson")
+                after_corr = after_frame.corr(method="pearson")
             for first_index, first in enumerate(numeric_columns):
                 for second in numeric_columns[first_index + 1:]:
                     before_value = before_corr.loc[first, second]

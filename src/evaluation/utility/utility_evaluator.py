@@ -22,7 +22,17 @@ def _numeric_series(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan)
 
 
-def _is_numeric_pair(before: pd.Series, after: pd.Series) -> bool:
+def _is_numeric_pair(
+    before: pd.Series,
+    after: pd.Series,
+    semantic_type: str = "auto",
+) -> bool:
+    if semantic_type in {"categorical", "datetime", "identifier"}:
+        return False
+    if semantic_type == "numeric":
+        before_values = _numeric_series(before)
+        after_values = _numeric_series(after)
+        return bool(before_values.notna().any() and after_values.notna().any())
     return (
         is_numeric_dtype(before.dtype)
         and is_numeric_dtype(after.dtype)
@@ -90,7 +100,9 @@ def _pair_correlation(
         if len(frame) < 3 or frame["x"].nunique() < 2 or frame["y"].nunique() < 2:
             return None
         if method == "spearman":
-            return float(frame["x"].corr(frame["y"], method="spearman"))
+            x_ranks = frame["x"].rank(method="average")
+            y_ranks = frame["y"].rank(method="average")
+            return float(x_ranks.corr(y_ranks, method="pearson"))
         return float(frame["x"].corr(frame["y"], method="pearson"))
 
     return (
@@ -105,9 +117,11 @@ def evaluate_utility(
     original: pd.DataFrame,
     transformed: pd.DataFrame,
     excluded_columns: list[str] | tuple[str, ...] = (),
+    semantic_types: dict[str, str] | None = None,
 ) -> UtilityEvaluation:
     """Сравнивает аналитические свойства исходной и обработанной таблиц в одной сессии."""
     excluded = set(map(str, excluded_columns))
+    semantic_types = semantic_types or {}
     original_columns = [str(column) for column in original.columns]
     transformed_columns = [str(column) for column in transformed.columns]
     common_columns = [
@@ -124,7 +138,7 @@ def evaluate_utility(
     for column in common_columns:
         before = original[column]
         after = transformed[column]
-        numeric_pair = _is_numeric_pair(before, after)
+        numeric_pair = _is_numeric_pair(before, after, semantic_types.get(column, "auto"))
         if numeric_pair:
             numeric_columns.append(column)
             numeric_count += 1

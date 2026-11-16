@@ -23,6 +23,7 @@ from data_processing.attribute_classifier import (
 )
 from data_processing.csv_handler import load_csv
 from data_processing.schema_inspector import ColumnTypeResult, analyze_column_types
+from data_processing.semantic_types import SEMANTIC_TYPE_LABELS
 from data_processing.quasi_identifier_analyzer import suggest_quasi_identifier_groups
 from infrastructure.attribute_profile_store import (
     DEFAULT_PROFILE_PATH,
@@ -35,6 +36,8 @@ from infrastructure.attribute_profile_store import (
     save_quasi_identifier_hierarchy,
     load_quasi_identifier_correlation_blocks,
     save_quasi_identifier_correlation_blocks,
+    load_semantic_types,
+    save_semantic_type,
 )
 from infrastructure.settings_manager import DEFAULT_SETTINGS_PATH, load_settings
 from application.analysis_workflow import export_analysis_results
@@ -56,14 +59,17 @@ SETTINGS_PATH = DEFAULT_SETTINGS_PATH
 def _format_analysis(
     results: list[ColumnTypeResult],
     settings_enabled: bool,
+    semantic_types: dict[str, str] | None = None,
 ) -> str:
     headers = (
         "АТРИБУТ",
         "ТИП PANDAS",
+        "СЕМАНТИЧЕСКИЙ ТИП",
         "НОМИНАЛЬНЫЙ",
         "УНИКАЛЬНЫЕ ЗНАЧЕНИЯ",
     )
     rows = []
+    semantic_types = semantic_types or {}
     for result in results:
         if result.is_nominal is None:
             nominal = "не проверялось" if not settings_enabled else "нет данных"
@@ -78,7 +84,8 @@ def _format_analysis(
                 f"{result.unique_count}/{result.non_null_count} "
                 f"({result.unique_percent:.2f}%)"
             )
-        rows.append((result.attribute, result.pandas_type, nominal, ratio))
+        semantic = SEMANTIC_TYPE_LABELS.get(semantic_types.get(result.attribute, "auto"), "Автоматически")
+        rows.append((result.attribute, result.pandas_type, semantic, nominal, ratio))
 
     widths = [
         max([len(headers[index])] + [len(row[index]) for row in rows])
@@ -184,6 +191,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Определить технические типы столбцов CSV-файла.",
     )
     analyze_parser.add_argument("csv_path", type=Path, help="Путь к CSV-файлу.")
+
+    semantic_list_parser = subparsers.add_parser(
+        "list-semantic-types",
+        help="Показать сохранённые семантические типы столбцов CSV.",
+    )
+    semantic_list_parser.add_argument("csv_path", type=Path, help="Путь к CSV-файлу.")
+
+    semantic_set_parser = subparsers.add_parser(
+        "set-semantic-type",
+        help="Сохранить семантический тип одного столбца CSV.",
+    )
+    semantic_set_parser.add_argument("csv_path", type=Path, help="Путь к CSV-файлу.")
+    semantic_set_parser.add_argument("--column", required=True, help="Название столбца.")
+    semantic_set_parser.add_argument(
+        "--type", dest="semantic_type", required=True, choices=tuple(SEMANTIC_TYPE_LABELS),
+        help="Тип: auto, numeric, categorical, datetime или identifier.",
+    )
 
     analysis_data_parser = subparsers.add_parser(
         "analyze-data",
@@ -536,6 +560,7 @@ def run_cli(arguments: list[str]) -> int:
                 _format_analysis(
                     results,
                     analysis_settings.detect_nominal_attributes,
+                    load_semantic_types(args.csv_path, PROFILE_PATH),
                 )
             )
             if not analysis_settings.detect_nominal_attributes:
@@ -546,6 +571,28 @@ def run_cli(arguments: list[str]) -> int:
                     f"\nПорог номинальности: не более {threshold:g}% "
                     "уникальных непустых значений."
                 )
+            return 0
+
+        if args.command == "list-semantic-types":
+            dataframe = load_csv(args.csv_path)
+            stored = load_semantic_types(args.csv_path, PROFILE_PATH)
+            print(f"Файл: {args.csv_path}")
+            for column in dataframe.columns:
+                semantic_type = stored.get(str(column), "auto")
+                print(f"{column}: {SEMANTIC_TYPE_LABELS[semantic_type]} [{semantic_type}]")
+            return 0
+
+        if args.command == "set-semantic-type":
+            dataframe = load_csv(args.csv_path)
+            if args.column not in dataframe.columns:
+                raise ValueError(f"Столбец «{args.column}» отсутствует в указанном CSV.")
+            save_semantic_type(
+                args.csv_path, args.column, args.semantic_type, PROFILE_PATH
+            )
+            print(
+                f"Семантический тип столбца «{args.column}» сохранён: "
+                f"{SEMANTIC_TYPE_LABELS[args.semantic_type]}."
+            )
             return 0
 
         if args.command == "classify-attributes":
