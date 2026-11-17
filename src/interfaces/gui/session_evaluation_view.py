@@ -22,6 +22,66 @@ CHECK_STATUS_PRESENTATION = {
 }
 
 
+def orient_attribute_changes(attributes: pd.DataFrame) -> pd.DataFrame:
+    """Возвращает показатели строками, а атрибуты — столбцами."""
+    if attributes.empty or "Атрибут" not in attributes.columns:
+        return pd.DataFrame()
+    display = attributes.set_index("Атрибут").transpose()
+    display.index.name = "Показатель"
+    return display
+
+
+def _format_correlation_value(value) -> str:
+    if value is None or pd.isna(value):
+        return "—"
+    return f"{float(value):.3f}"
+
+
+def _format_observation_count(value) -> str:
+    if value is None or pd.isna(value):
+        return "—"
+    return str(int(value))
+
+
+def build_correlation_matrix(correlations: pd.DataFrame, method: str) -> pd.DataFrame:
+    """Строит симметричную матрицу сравнения корреляций до и после обработки."""
+    required = {
+        "Атрибут 1", "Атрибут 2", "Метод", "Коэффициент до", "Коэффициент после",
+        "Абсолютное изменение", "Парных наблюдений до", "Парных наблюдений после",
+    }
+    if correlations.empty or not required.issubset(correlations.columns):
+        return pd.DataFrame()
+
+    selected = correlations[
+        correlations["Метод"].astype(str).str.casefold() == method.casefold()
+    ]
+    if selected.empty:
+        return pd.DataFrame()
+
+    attributes: list[str] = []
+    for column in ("Атрибут 1", "Атрибут 2"):
+        for value in selected[column].astype(str):
+            if value not in attributes:
+                attributes.append(value)
+
+    matrix = pd.DataFrame("—", index=attributes, columns=attributes, dtype=object)
+    matrix.index.name = "Атрибут"
+
+    for item in selected.to_dict(orient="records"):
+        first = str(item["Атрибут 1"])
+        second = str(item["Атрибут 2"])
+        before = _format_correlation_value(item["Коэффициент до"])
+        after = _format_correlation_value(item["Коэффициент после"])
+        change = _format_correlation_value(item["Абсолютное изменение"])
+        before_n = _format_observation_count(item["Парных наблюдений до"])
+        after_n = _format_observation_count(item["Парных наблюдений после"])
+        cell = f"{before} → {after} | Δ {change} | n {before_n}→{after_n}"
+        matrix.at[first, second] = cell
+        matrix.at[second, first] = cell
+
+    return matrix
+
+
 class SessionEvaluationView(ttk.Frame):
     def __init__(self, parent: tk.Misc, session: DatasetSession):
         super().__init__(parent, padding=10)
@@ -86,7 +146,13 @@ class SessionEvaluationView(ttk.Frame):
         if attributes.empty:
             ttk.Label(attributes_frame, text="Нет общих атрибутов для сравнения.", padding=16).pack(anchor="center", expand=True)
         else:
-            DataFrameTable(attributes_frame, attributes, include_index=False).pack(fill="both", expand=True)
+            ttk.Label(
+                attributes_frame,
+                text="Атрибуты расположены в столбцах, показатели — в строках.",
+                padding=(6, 6),
+            ).pack(anchor="w")
+            attribute_matrix = orient_attribute_changes(attributes)
+            DataFrameTable(attributes_frame, attribute_matrix, include_index=True).pack(fill="both", expand=True)
 
         correlations_frame = ttk.Frame(notebook)
         notebook.add(correlations_frame, text="Изменения корреляций")
@@ -98,7 +164,30 @@ class SessionEvaluationView(ttk.Frame):
                 padding=16,
             ).pack(anchor="center", expand=True)
         else:
-            DataFrameTable(correlations_frame, correlations, include_index=False).pack(fill="both", expand=True)
+            ttk.Label(
+                correlations_frame,
+                text=(
+                    "Строки и столбцы — атрибуты. В ячейке: корреляция до → после, "
+                    "абсолютное изменение и число парных наблюдений до/после."
+                ),
+                padding=(6, 6),
+                wraplength=1050,
+            ).pack(anchor="w")
+            correlation_notebook = ttk.Notebook(correlations_frame)
+            correlation_notebook.pack(fill="both", expand=True)
+            for method in ("Pearson", "Spearman"):
+                matrix = build_correlation_matrix(correlations, method)
+                if matrix.empty:
+                    continue
+                method_frame = ttk.Frame(correlation_notebook)
+                correlation_notebook.add(method_frame, text=method)
+                DataFrameTable(
+                    method_frame,
+                    matrix,
+                    include_index=True,
+                    column_width=360,
+                    index_column_width=190,
+                ).pack(fill="both", expand=True)
 
         if utility is not None and utility.excluded_columns:
             excluded = ttk.Label(

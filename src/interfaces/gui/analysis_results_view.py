@@ -10,7 +10,14 @@ from application.analysis_workflow import AnalysisResults
 
 
 class DataFrameTable(ttk.Frame):
-    def __init__(self, parent: tk.Misc, dataframe: pd.DataFrame, include_index: bool = True):
+    def __init__(
+        self,
+        parent: tk.Misc,
+        dataframe: pd.DataFrame,
+        include_index: bool = True,
+        column_width: int = 220,
+        index_column_width: int | None = None,
+    ):
         super().__init__(parent)
         self.dataframe = dataframe
         self.columnconfigure(0, weight=1)
@@ -24,9 +31,12 @@ class DataFrameTable(ttk.Frame):
         self.tree = ttk.Treeview(self, columns=columns, show="headings")
         self.tree.tag_configure("row_even", background="#FFFFFF")
         self.tree.tag_configure("row_odd", background="#F1F5F9")
-        for column in columns:
+        for index, column in enumerate(columns):
             self.tree.heading(column, text=column)
-            width = 320 if column == "Показатель" else 220
+            if include_index and index == 0:
+                width = index_column_width or (320 if column == "Показатель" else 220)
+            else:
+                width = column_width
             self.tree.column(column, width=width, minwidth=100, anchor="w", stretch=True)
 
         vertical = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
