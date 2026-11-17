@@ -19,6 +19,26 @@ from interfaces.mcp.dataset_tools import (  # noqa: E402
     open_dataset as open_dataset_tool,
 )
 from interfaces.mcp.registry import DatasetRegistry  # noqa: E402
+from interfaces.mcp.action_store import PendingActionStore  # noqa: E402
+from interfaces.mcp.profile_tools import (  # noqa: E402
+    apply_profile_changes as apply_profile_changes_operation,
+    get_category_values_tool,
+    get_dataset_profile,
+    preview_profile_changes as preview_profile_changes_operation,
+    suggest_attribute_roles as suggest_attribute_roles_operation,
+    suggest_qi_groups_tool,
+    suggest_semantic_types_tool,
+)
+from interfaces.mcp.analysis_tools import (  # noqa: E402
+    analyze_anonymized_result as analyze_anonymized_result_operation,
+    analyze_dataset as analyze_dataset_operation,
+    get_privacy_result as get_privacy_result_operation,
+    get_utility_result as get_utility_result_operation,
+)
+from interfaces.mcp.anonymization_tools import (  # noqa: E402
+    execute_anonymization as execute_anonymization_operation,
+    prepare_anonymization_plan as prepare_anonymization_plan_operation,
+)
 
 
 SERVER_INSTRUCTIONS = (
@@ -52,7 +72,7 @@ RESOURCE_CONTENT = {
 
 
 def create_server(registry: DatasetRegistry):
-    """Создаёт MCP Server v2 и регистрирует локальные инструменты первого этапа."""
+    """Создаёт MCP Server v2 и регистрирует инструменты AI Host."""
     try:
         from mcp.server import MCPServer
     except ImportError as error:
@@ -64,10 +84,12 @@ def create_server(registry: DatasetRegistry):
     mcp_server = MCPServer(
         "anonymization-service",
         title="Сервис анонимизации",
-        description="Локальные инструменты изучения CSV для последующего AI Host.",
+        description="Локальные инструменты изучения CSV, управления профилями, аналитики и анонимизации для GigaChat AI Host.",
         instructions=SERVER_INSTRUCTIONS,
-        version="0.6.0-dev.1",
+        version="0.6.1",
     )
+
+    pending_actions = PendingActionStore()
 
     @mcp_server.tool()
     def list_datasets() -> dict[str, Any]:
@@ -83,6 +105,91 @@ def create_server(registry: DatasetRegistry):
     def inspect_dataset(dataset_id: str) -> dict[str, Any]:
         """Возвращает схему, типы, счётчики, предложения ролей и потенциальные QI-группы без строк данных."""
         return inspect_dataset_tool(registry, dataset_id)
+
+    @mcp_server.tool()
+    def suggest_attribute_roles(dataset_id: str) -> dict[str, Any]:
+        """Возвращает локальные предложения ролей без передачи примеров значений."""
+        return suggest_attribute_roles_operation(registry, dataset_id)
+
+    @mcp_server.tool()
+    def suggest_semantic_types(dataset_id: str) -> dict[str, Any]:
+        """Возвращает назначенные и предложенные семантические типы атрибутов."""
+        return suggest_semantic_types_tool(registry, dataset_id)
+
+    @mcp_server.tool()
+    def suggest_qi_groups(dataset_id: str) -> dict[str, Any]:
+        """Возвращает локальные предложения QI-групп без строк данных."""
+        return suggest_qi_groups_tool(registry, dataset_id)
+
+    @mcp_server.tool()
+    def get_dataset_profile(dataset_id: str) -> dict[str, Any]:
+        """Возвращает ручные роли, семантические типы, QI-группы и безопасную сводку иерархий."""
+        return get_dataset_profile(registry, dataset_id)
+
+    @mcp_server.tool()
+    def get_category_values(dataset_id: str, column: str, minimum_frequency: int = 5) -> dict[str, Any]:
+        """Возвращает частые категории одного столбца; Host обязан запросить отдельное согласие на передачу названий."""
+        return get_category_values_tool(registry, dataset_id, column, minimum_frequency)
+
+    @mcp_server.tool()
+    def preview_profile_changes(dataset_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Проверяет и показывает изменения ролей, типов, QI-групп и иерархий без записи."""
+        return preview_profile_changes_operation(registry, pending_actions, dataset_id, updates)
+
+    @mcp_server.tool()
+    def apply_profile_changes(dataset_id: str, change_id: str, approval_token: str) -> dict[str, Any]:
+        """Сохраняет подготовленный профиль только с одноразовым токеном, который выдаёт локальный Host после подтверждения."""
+        return apply_profile_changes_operation(registry, pending_actions, dataset_id, change_id, approval_token)
+
+    @mcp_server.tool()
+    def analyze_dataset(dataset_id: str) -> dict[str, Any]:
+        """Запускает существующий статистический анализ; возвращает только агрегаты с подавлением малых групп."""
+        return analyze_dataset_operation(registry, dataset_id)
+
+    @mcp_server.tool()
+    def prepare_anonymization_plan(
+        dataset_id: str,
+        operations: list[str],
+        default_k: int = 5,
+        representative: str = "mean",
+        enable_l_diversity: bool = True,
+        default_l: int = 2,
+        l_variant: str = "both",
+    ) -> dict[str, Any]:
+        """Подготавливает план существующей анонимизации без выполнения и сохранения файла."""
+        return prepare_anonymization_plan_operation(
+            registry, pending_actions, dataset_id, operations, default_k,
+            representative, enable_l_diversity, default_l, l_variant,
+        )
+
+    @mcp_server.tool()
+    def execute_anonymization(
+        dataset_id: str,
+        plan_id: str,
+        approval_token: str,
+        destination: str,
+        overwrite: bool = False,
+    ) -> dict[str, Any]:
+        """Выполняет ранее подготовленный план только после локального подтверждения Host."""
+        return execute_anonymization_operation(
+            registry, pending_actions, dataset_id, plan_id, approval_token,
+            destination, overwrite,
+        )
+
+    @mcp_server.tool()
+    def get_privacy_result(dataset_id: str) -> dict[str, Any]:
+        """Возвращает безопасный статус Privacy Release Check без подробностей заблокированного выпуска."""
+        return get_privacy_result_operation(registry, dataset_id)
+
+    @mcp_server.tool()
+    def get_utility_result(dataset_id: str) -> dict[str, Any]:
+        """Возвращает агрегированную оценку полезности с фильтрацией малых групп."""
+        return get_utility_result_operation(registry, dataset_id)
+
+    @mcp_server.tool()
+    def analyze_anonymized_result(dataset_id: str) -> dict[str, Any]:
+        """Запускает существующий анализ уже созданного результата анонимизации."""
+        return analyze_anonymized_result_operation(registry, dataset_id)
 
     for uri, resource in RESOURCE_CONTENT.items():
         def make_resource_handler(payload: dict[str, str]):
@@ -105,7 +212,7 @@ def _resolve_workspace(argument: str | None) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Локальный MCP Server сервиса анонимизации (этап 1 версии 0.6.0)."
+        description="Локальный MCP Server сервиса анонимизации версии 0.6.1."
     )
     parser.add_argument(
         "--workspace",

@@ -38,3 +38,6 @@ Thumbs.db
 /PROJECT_CONTEXT.md
 /data/metadata/*.json
 /tests/
+
+# Локальные настройки консольного AI Host (рабочая папка и параметры модели)
+/config/assistant.json

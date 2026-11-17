@@ -706,3 +706,111 @@ def delete_quasi_identifier_hierarchy(
         dataset.pop("generalization_hierarchies", None)
     _remove_empty_dataset(registry, dataset)
     _write_registry(path, registry)
+
+
+def save_profile_bundle(
+    csv_path: str | Path,
+    *,
+    role_overrides: dict[str, list[str]] | None = None,
+    semantic_types: dict[str, str] | None = None,
+    quasi_identifier_groups: list[dict] | None = None,
+    hierarchy_updates: dict[str, list[dict] | None] | None = None,
+    available_columns: set[str] | list[str] | tuple[str, ...],
+    profile_path: str | Path = DEFAULT_PROFILE_PATH,
+) -> None:
+    """Атомарно сохраняет подтверждённый пакет изменений профиля одного CSV."""
+    available = set(map(str, available_columns))
+    validated_roles = None
+    if role_overrides is not None:
+        if not isinstance(role_overrides, dict):
+            raise ValueError("Роли должны быть представлены объектом столбец → список ролей.")
+        validated_roles = {}
+        for column, roles in role_overrides.items():
+            if column not in available:
+                raise ValueError(f"Столбец «{column}» отсутствует в CSV.")
+            if not isinstance(roles, list):
+                raise ValueError(f"Роли столбца «{column}» должны быть списком.")
+            if len(roles) != len(set(roles)) or any(role not in ROLE_LABELS for role in roles):
+                raise ValueError(f"Некорректные роли для столбца «{column}».")
+            if roles:
+                validated_roles[column] = list(roles)
+
+    validated_types = None
+    if semantic_types is not None:
+        validated_types = validate_semantic_types(semantic_types)
+        missing = sorted(set(validated_types) - available)
+        if missing:
+            raise ValueError("Семантические типы ссылаются на отсутствующие столбцы: " + ", ".join(missing))
+
+    validated_groups = None
+    if quasi_identifier_groups is not None:
+        validated_groups = _validate_groups(quasi_identifier_groups, available)
+    effective_roles = validated_roles if validated_roles is not None else load_manual_role_overrides(csv_path, profile_path)
+    effective_groups = validated_groups if validated_groups is not None else load_quasi_identifier_groups(csv_path, profile_path)
+    direct_columns = {
+        column for column, roles in effective_roles.items()
+        if "direct_identifier" in roles
+    }
+    for group in effective_groups:
+        direct_in_group = sorted(set(group["attributes"]) & direct_columns)
+        if direct_in_group:
+            raise ValueError(
+                f"QI-группа «{group['name']}» содержит прямые идентификаторы: "
+                + ", ".join(direct_in_group)
+            )
+
+    validated_hierarchies: dict[str, list[dict] | None] | None = None
+    if hierarchy_updates is not None:
+        if not isinstance(hierarchy_updates, dict):
+            raise ValueError("Иерархии должны быть представлены объектом столбец → уровни.")
+        validated_hierarchies = {}
+        for column, levels in hierarchy_updates.items():
+            if column not in available:
+                raise ValueError(f"Столбец «{column}» отсутствует в CSV.")
+            if levels in (None, []):
+                validated_hierarchies[column] = None
+                continue
+            if not isinstance(levels, list) or not levels:
+                raise ValueError(f"Иерархия столбца «{column}» должна содержать список уровней.")
+            normalized_levels: list[dict[str, str]] = []
+            for index, level in enumerate(levels, start=1):
+                if not isinstance(level, dict) or not level:
+                    raise ValueError(f"Уровень {index} столбца «{column}» должен быть непустым объектом.")
+                if any(
+                    not isinstance(key, str) or not key
+                    or not isinstance(value, str) or not value.strip()
+                    for key, value in level.items()
+                ):
+                    raise ValueError(f"Уровень {index} столбца «{column}» содержит некорректные значения.")
+                normalized_levels.append(dict(level))
+            validated_hierarchies[column] = normalized_levels
+
+    path = Path(profile_path)
+    registry = _read_registry(path)
+    dataset = _get_or_create_dataset(registry, csv_path)
+    if validated_roles is not None:
+        if validated_roles:
+            dataset["manual_overrides"] = validated_roles
+        else:
+            dataset.pop("manual_overrides", None)
+    if validated_types is not None:
+        if validated_types:
+            dataset["semantic_types"] = validated_types
+        else:
+            dataset.pop("semantic_types", None)
+    if validated_groups is not None:
+        if validated_groups:
+            dataset["quasi_identifier_groups"] = validated_groups
+        else:
+            dataset.pop("quasi_identifier_groups", None)
+    if validated_hierarchies is not None:
+        hierarchies = dataset.setdefault("generalization_hierarchies", {})
+        for column, levels in validated_hierarchies.items():
+            if levels is None:
+                hierarchies.pop(column, None)
+            else:
+                hierarchies[column] = levels
+        if not hierarchies:
+            dataset.pop("generalization_hierarchies", None)
+    _remove_empty_dataset(registry, dataset)
+    _write_registry(path, registry)

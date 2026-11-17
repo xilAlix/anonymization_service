@@ -207,3 +207,29 @@ class DatasetRegistry:
     @property
     def active_dataset_id(self) -> str | None:
         return self._active_dataset_id
+
+    def resolve_output_path(self, relative_path: str, *, create_parent: bool = False) -> Path:
+        """Разрешает только относительный путь внутри workspace, без ссылок и обхода каталогов."""
+        if not isinstance(relative_path, str) or not relative_path.strip():
+            raise ValueError("Необходимо указать относительный путь выходного CSV.")
+        raw = Path(relative_path)
+        if raw.is_absolute() or raw.drive or any(part in {"..", ""} for part in raw.parts):
+            raise ValueError("Выходной путь должен быть относительным и находиться внутри рабочей папки.")
+        if raw.suffix.casefold() != ".csv":
+            raise ValueError("Результат должен иметь расширение .csv.")
+        target = self.workspace / raw
+        if contains_link_component(target):
+            raise ValueError("Символические ссылки и junction в выходном пути запрещены.")
+        parent = target.parent
+        if create_parent:
+            parent.mkdir(parents=True, exist_ok=True)
+        if not parent.exists() or not parent.is_dir():
+            raise ValueError("Папка назначения не существует внутри рабочей директории.")
+        resolved_parent = parent.resolve(strict=True)
+        try:
+            resolved_parent.relative_to(self.workspace)
+        except ValueError as error:
+            raise ValueError("Выходной путь выходит за пределы рабочей директории.") from error
+        if contains_link_component(resolved_parent):
+            raise ValueError("Символические ссылки и junction в выходном пути запрещены.")
+        return resolved_parent / target.name
