@@ -40,6 +40,7 @@ from infrastructure.attribute_profile_store import (
     save_semantic_type,
 )
 from infrastructure.settings_manager import DEFAULT_SETTINGS_PATH, load_settings
+from infrastructure.file_safety import validate_input_file, validate_output_file
 from application.analysis_workflow import export_analysis_results
 from application.service import analyze_session_source, execute_anonymization_for_session
 from application.session_workflow import DatasetSession
@@ -459,7 +460,7 @@ def run_cli(arguments: list[str]) -> int:
 
     try:
         if args.command == "analyze-data":
-            input_path = args.input_csv.resolve()
+            input_path = validate_input_file(args.input_csv)
             dataframe = load_csv(input_path)
             date_formats: dict[str, str] = {}
             requested_dates = set(args.date_columns)
@@ -832,8 +833,8 @@ def run_cli(arguments: list[str]) -> int:
             return 0 if report["status"] == "satisfied" else 1
 
         if args.command == "k-anonymize":
-            input_path = args.input_csv.resolve()
-            output_path = args.output_csv.resolve()
+            input_path = validate_input_file(args.input_csv)
+            output_path = validate_output_file(args.output_csv)
             if input_path == output_path:
                 raise ValueError("Выходной файл не должен совпадать с исходным CSV.")
             if output_path.exists() and not args.overwrite:
@@ -854,7 +855,7 @@ def run_cli(arguments: list[str]) -> int:
                 raise ValueError("k должно быть не меньше 2.")
 
             report_path = (
-                Path(args.report_json).resolve()
+                validate_output_file(args.report_json)
                 if args.report_json is not None
                 else output_path.with_name(output_path.stem + "_k_report.json")
             )
@@ -897,8 +898,8 @@ def run_cli(arguments: list[str]) -> int:
             return 0
 
         if args.command == "anonymize-selected":
-            input_path = args.input_csv.resolve()
-            output_path = args.output_csv.resolve()
+            input_path = validate_input_file(args.input_csv)
+            output_path = validate_output_file(args.output_csv)
             if input_path == output_path:
                 raise ValueError("Выходной файл не должен совпадать с исходным CSV.")
             if output_path.exists() and not args.overwrite:
@@ -978,8 +979,8 @@ def run_cli(arguments: list[str]) -> int:
             return 0
 
         if args.command in {"anonymize", "remove-direct-identifiers"}:
-            input_path = args.input_csv.resolve()
-            output_path = args.output_csv.resolve()
+            input_path = validate_input_file(args.input_csv)
+            output_path = validate_output_file(args.output_csv)
             if input_path == output_path:
                 raise ValueError("Выходной файл не должен совпадать с исходным CSV.")
             if output_path.exists() and not args.overwrite:
@@ -1021,20 +1022,35 @@ def run_cli(arguments: list[str]) -> int:
         if report_path is None and output_csv is not None:
             report_path = output_csv.with_name(output_csv.stem + "_l_diversity_failed_report.json")
         if report_path is not None:
-            report_path = Path(report_path).resolve()
-            output_path = Path(output_csv).resolve() if output_csv is not None else None
-            input_path = getattr(args, "input_csv", None)
-            input_path = Path(input_path).resolve() if input_path is not None else None
-            if report_path not in {output_path, input_path}:
-                if report_path.exists() and not getattr(args, "overwrite", False):
+            try:
+                safe_report_path = validate_output_file(report_path)
+                safe_output_path = (
+                    validate_output_file(output_csv) if output_csv is not None else None
+                )
+                input_argument = getattr(args, "input_csv", None)
+                safe_input_path = (
+                    validate_input_file(input_argument)
+                    if input_argument is not None and Path(input_argument).exists()
+                    else None
+                )
+                if safe_report_path in {safe_output_path, safe_input_path}:
+                    raise ValueError(
+                        "Путь диагностического отчёта совпадает с исходным или выходным файлом."
+                    )
+                if safe_report_path.exists() and not getattr(args, "overwrite", False):
                     print(
-                        f"Диагностический отчёт не записан: файл уже существует {report_path}. "
+                        f"Диагностический отчёт не записан: файл уже существует {safe_report_path}. "
                         "Для перезаписи укажи --overwrite.",
                         file=sys.stderr,
                     )
                 else:
-                    save_k_anonymity_report(error.report, report_path)
-                    print(f"Диагностический отчёт: {report_path}", file=sys.stderr)
+                    save_k_anonymity_report(error.report, safe_report_path)
+                    print(f"Диагностический отчёт: {safe_report_path}", file=sys.stderr)
+            except (OSError, ValueError) as report_error:
+                print(
+                    f"Диагностический отчёт не записан: {report_error}",
+                    file=sys.stderr,
+                )
         return 2
     except (OSError, ValueError, RuntimeError, pd.errors.ParserError) as error:
         print(f"Ошибка: {error}", file=sys.stderr)

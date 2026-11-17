@@ -26,8 +26,13 @@ from infrastructure.attribute_profile_store import (
 )
 from data_processing.schema_inspector import analyze_column_types
 from infrastructure.settings_manager import AppSettings, load_settings
+from infrastructure.file_safety import validate_output_file
 from application.analysis_workflow import export_analysis_results
-from application.service import analyze_session_source, execute_anonymization_for_session
+from application.service import (
+    analyze_session_source,
+    execute_anonymization_for_session,
+    prepare_anonymization_plan,
+)
 from application.session_workflow import DatasetSession
 from interfaces.gui.analysis_results_view import AnalysisResultsView, DataFrameTable, DateColumnDialog
 from interfaces.gui.session_evaluation_view import SessionEvaluationView
@@ -758,6 +763,8 @@ class TableViewer(tk.Tk):
         )
         if k_value is None:
             return
+        if not self._confirm_plan_warnings([K_ANONYMITY]):
+            return
         output_path = filedialog.asksaveasfilename(
             parent=self,
             title="Сохранить результирующую CSV-таблицу",
@@ -767,7 +774,11 @@ class TableViewer(tk.Tk):
         )
         if not output_path:
             return
-        destination = Path(output_path).resolve()
+        try:
+            destination = validate_output_file(output_path)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Недопустимый путь", str(error), parent=self)
+            return
         if destination == self.current_file_path.resolve():
             messagebox.showerror(
                 "Недопустимый путь",
@@ -942,6 +953,41 @@ class TableViewer(tk.Tk):
             title="Сохранить таблицу без прямых идентификаторов",
         )
 
+    def _confirm_plan_warnings(self, operations: list[str]) -> bool:
+        if self.dataset_session is None:
+            messagebox.showerror(
+                "Нет рабочей сессии",
+                "Рабочая сессия таблицы не создана. Повторно откройте CSV.",
+                parent=self,
+            )
+            return False
+        try:
+            plan = prepare_anonymization_plan(
+                self.dataset_session,
+                operations,
+                default_k=self.settings.k_anonymization.default_k,
+                enable_l_diversity=(
+                    self.settings.k_anonymization.enable_l_diversity
+                    and K_ANONYMITY in operations
+                ),
+                default_l=self.settings.k_anonymization.default_l,
+                l_variant=self.settings.k_anonymization.l_diversity_variant,
+            )
+        except (OSError, ValueError, RuntimeError) as error:
+            messagebox.showerror("План анонимизации не прошёл проверку", str(error), parent=self)
+            return False
+
+        warnings = plan.get("warnings", [])
+        if not warnings:
+            return True
+        details = "\n\n".join(f"• {warning}" for warning in warnings)
+        return messagebox.askyesno(
+            "Проверьте план анонимизации",
+            details + "\n\nПродолжить выполнение с этими ограничениями?",
+            parent=self,
+            default=messagebox.NO,
+        )
+
     def _execute_anonymization(
         self,
         operations: list[str],
@@ -951,6 +997,8 @@ class TableViewer(tk.Tk):
     ) -> None:
         if self.current_dataframe is None or self.current_file_path is None:
             self.status.set("Сначала загрузите CSV-файл.")
+            return
+        if not self._confirm_plan_warnings(operations):
             return
 
         output_path = filedialog.asksaveasfilename(
@@ -962,7 +1010,11 @@ class TableViewer(tk.Tk):
         )
         if not output_path:
             return
-        destination = Path(output_path).resolve()
+        try:
+            destination = validate_output_file(output_path)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Недопустимый путь", str(error), parent=self)
+            return
         if destination == self.current_file_path.resolve():
             messagebox.showerror(
                 "Недопустимый путь",

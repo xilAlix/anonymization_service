@@ -22,8 +22,10 @@ from infrastructure.attribute_profile_store import (
     DEFAULT_PROFILE_PATH,
     load_manual_role_overrides,
     load_quasi_identifier_groups,
+    load_quasi_identifier_hierarchies,
     load_semantic_types,
 )
+from infrastructure.file_safety import validate_output_file
 
 
 @dataclass
@@ -105,6 +107,43 @@ def prepare_anonymization_plan(
         and column in session.source_dataframe.columns
     ]
     plan_warnings: list[str] = []
+    if K_ANONYMITY in operations:
+        assigned_qi = {
+            column for column, assigned in roles.items()
+            if "quasi_identifier" in assigned
+            and "direct_identifier" not in assigned
+            and column in session.source_dataframe.columns
+        }
+        grouped_qi = {
+            column for group in active_groups for column in group.get("attributes", [])
+        }
+        uncovered_qi = sorted(assigned_qi - grouped_qi)
+        if uncovered_qi:
+            plan_warnings.append(
+                "Столбцы с ролью квази-идентификатора не входят ни в одну активную QI-группу "
+                "и не будут преобразованы k-анонимизацией: " + ", ".join(uncovered_qi) + "."
+            )
+
+        hierarchies = load_quasi_identifier_hierarchies(session.source_path, profile_path)
+        categorical_without_hierarchy = []
+        for column in sorted(grouped_qi):
+            semantic_type = semantic_types.get(column, "auto")
+            series = session.source_dataframe[column]
+            is_categorical = semantic_type == "categorical" or (
+                semantic_type == "auto"
+                and not pd.api.types.is_numeric_dtype(series.dtype)
+                and not pd.api.types.is_datetime64_any_dtype(series.dtype)
+            )
+            if is_categorical and not hierarchies.get(column):
+                categorical_without_hierarchy.append(column)
+        if categorical_without_hierarchy:
+            plan_warnings.append(
+                "Для категориальных QI-столбцов нет иерархий обобщения: "
+                + ", ".join(categorical_without_hierarchy)
+                + ". Если в кластере значения различаются, они могут быть подавлены символом *. "
+                "Настройте иерархии в расширенных настройках QI."
+            )
+
     if enable_l_diversity and K_ANONYMITY in operations:
         if isinstance(default_l, bool) or not isinstance(default_l, int) or default_l < 2:
             raise ValueError("Значение l должно быть целым числом не меньше 2.")
@@ -161,7 +200,7 @@ def execute_anonymization_for_session(
     overwrite: bool = False,
 ) -> SessionExecutionResult:
     """Выполняет анонимизацию, сохраняет результат и оценивает его в рамках той же сессии."""
-    output_path = Path(destination).resolve()
+    output_path = validate_output_file(destination)
     if output_path == session.source_path.resolve():
         raise ValueError("Нельзя сохранять результат поверх исходной таблицы.")
     if output_path.exists() and not overwrite:

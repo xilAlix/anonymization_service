@@ -9,6 +9,7 @@ from anonymization.algorithms.k_anonymity import (
     evaluate_qi_profiles,
 )
 from evaluation.privacy.l_diversity import evaluate_l_diversity
+from infrastructure.file_safety import atomic_write_text
 from infrastructure.attribute_profile_store import (
     DEFAULT_PROFILE_PATH,
     load_manual_role_overrides,
@@ -258,11 +259,8 @@ def evaluate_current_l(
 
 
 def save_k_anonymity_report(report: dict, output_path: str | Path) -> None:
-    path = Path(output_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_suffix(path.suffix + ".tmp")
-    temporary_path.write_text(
+    atomic_write_text(
+        output_path,
         json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
-        encoding="utf-8",
+        create_parents=True,
     )
-    temporary_path.replace(path)

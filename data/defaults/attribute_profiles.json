@@ -1,0 +1,523 @@
+{
+  "format_version": 5,
+  "datasets": {
+    "content:8713d10ae47dd46bef6949b4d25ed5018b98d8d7f831fccea2a8afae951b4319": {
+      "source_name": "initial_dataset.csv",
+      "manual_overrides": {
+        "customer_id": [
+          "direct_identifier"
+        ],
+        "age": [
+          "quasi_identifier"
+        ],
+        "district": [
+          "quasi_identifier"
+        ],
+        "monthly_income": [
+          "sensitive_attribute"
+        ],
+        "purchase_amount": [
+          "analytical_attribute"
+        ]
+      },
+      "quasi_identifier_groups": [
+        {
+          "id": "initial_demo_qi",
+          "name": "Демографический профиль",
+          "attributes": [
+            "age",
+            "district"
+          ],
+          "source": "manual",
+          "confidence": "ручная",
+          "description": "Демонстрационная QI-группа базового набора: возраст и район.",
+          "external_source_families": [],
+          "attribute_evidence": {},
+          "reasons": [
+            "Группа включена как учебный профиль для проверки полного цикла анонимизации.",
+            "Перед обработкой реальных данных состав QI следует пересмотреть под модель угроз."
+          ],
+          "unique_tuple_count": null,
+          "unique_tuple_ratio": null,
+          "row_count": 100,
+          "active": true,
+          "k_override": null
+        }
+      ],
+      "dataset_id": "content:8713d10ae47dd46bef6949b4d25ed5018b98d8d7f831fccea2a8afae951b4319",
+      "content_fingerprints": [
+        "content:8713d10ae47dd46bef6949b4d25ed5018b98d8d7f831fccea2a8afae951b4319"
+      ],
+      "schema_signature": "1e2098fb08df55cfb7744faf6af7c57d4f62c47d37e92a4da80f66c49c1a33ec",
+      "semantic_types": {
+        "customer_id": "identifier",
+        "age": "numeric",
+        "district": "categorical",
+        "monthly_income": "numeric",
+        "purchase_amount": "numeric"
+      },
+      "generalization_hierarchies": {
+        "district": [
+          {
+            "Центральный": "Районы города",
+            "Северный": "Районы города",
+            "Западный": "Районы города",
+            "Южный": "Районы города",
+            "Восточный": "Районы города"
+          }
+        ]
+      }
+    },
+    "content:4bcf853900539207a60b65c57111a8b0cfd5a9d65d1016cda124b316cd260165": {
+      "source_name": "retail_customers_orders_60.csv",
+      "dataset_id": "content:4bcf853900539207a60b65c57111a8b0cfd5a9d65d1016cda124b316cd260165",
+      "content_fingerprints": [
+        "content:4bcf853900539207a60b65c57111a8b0cfd5a9d65d1016cda124b316cd260165"
+      ],
+      "manual_overrides": {
+        "customer_id": [
+          "direct_identifier"
+        ],
+        "full_name": [
+          "direct_identifier"
+        ],
+        "email": [
+          "direct_identifier"
+        ],
+        "age": [
+          "quasi_identifier"
+        ],
+        "city": [
+          "quasi_identifier"
+        ],
+        "region": [
+          "quasi_identifier"
+        ],
+        "loyalty_tier": [
+          "quasi_identifier"
+        ],
+        "monthly_income_eur": [
+          "sensitive_attribute"
+        ],
+        "country": [
+          "analytical_attribute"
+        ],
+        "registration_date": [
+          "analytical_attribute"
+        ],
+        "last_order_date": [
+          "analytical_attribute"
+        ],
+        "orders_count_12m": [
+          "analytical_attribute"
+        ],
+        "average_order_eur": [
+          "analytical_attribute"
+        ],
+        "total_spent_12m_eur": [
+          "analytical_attribute"
+        ]
+      },
+      "semantic_types": {
+        "customer_id": "identifier",
+        "full_name": "identifier",
+        "email": "identifier",
+        "age": "numeric",
+        "city": "categorical",
+        "region": "categorical",
+        "country": "categorical",
+        "loyalty_tier": "categorical",
+        "monthly_income_eur": "numeric",
+        "registration_date": "datetime",
+        "last_order_date": "datetime",
+        "orders_count_12m": "numeric",
+        "average_order_eur": "numeric",
+        "total_spent_12m_eur": "numeric"
+      },
+      "quasi_identifier_groups": [
+        {
+          "id": "43244f42c7",
+          "name": "Профиль покупателя",
+          "attributes": [
+            "age",
+            "city",
+            "region",
+            "loyalty_tier"
+          ],
+          "source": "manual",
+          "confidence": "ручная",
+          "description": "Одна строка соответствует одному клиенту. В группу включены все поля, отмеченные как квази-идентификаторы.",
+          "external_source_families": [],
+          "attribute_evidence": {},
+          "reasons": [
+            "Демонстрационный профиль охватывает возраст, город, регион и уровень лояльности.",
+            "Иерархии обобщения категорий входят в комплектный профиль.",
+            "Перед обработкой реальных данных проверьте состав группы по своей модели угроз."
+          ],
+          "unique_tuple_count": null,
+          "unique_tuple_ratio": null,
+          "row_count": null,
+          "active": true,
+          "k_override": null
+        }
+      ],
+      "generalization_hierarchies": {
+        "city": [
+          {
+            "Пярну": "Пярнумаа",
+            "Рига": "Рижский регион",
+            "Клайпеда": "Клайпедский регион",
+            "Тарту": "Тартумаа",
+            "Лиепая": "Курземе",
+            "Нарва": "Ида-Вирумаа",
+            "Таллин": "Харьюмаа",
+            "Хельсинки": "Уусимаа",
+            "Каунас": "Каунасский регион",
+            "Вильнюс": "Вильнюсский регион"
+          },
+          {
+            "Пярнумаа": "Эстония",
+            "Рижский регион": "Латвия",
+            "Клайпедский регион": "Литва",
+            "Тартумаа": "Эстония",
+            "Курземе": "Латвия",
+            "Ида-Вирумаа": "Эстония",
+            "Харьюмаа": "Эстония",
+            "Уусимаа": "Финляндия",
+            "Каунасский регион": "Литва",
+            "Вильнюсский регион": "Литва"
+          },
+          {
+            "Эстония": "Северная Европа",
+            "Латвия": "Северная Европа",
+            "Литва": "Северная Европа",
+            "Финляндия": "Северная Европа"
+          }
+        ],
+        "region": [
+          {
+            "Пярнумаа": "Эстония",
+            "Рижский регион": "Латвия",
+            "Клайпедский регион": "Литва",
+            "Тартумаа": "Эстония",
+            "Курземе": "Латвия",
+            "Ида-Вирумаа": "Эстония",
+            "Харьюмаа": "Эстония",
+            "Уусимаа": "Финляндия",
+            "Каунасский регион": "Литва",
+            "Вильнюсский регион": "Литва"
+          },
+          {
+            "Эстония": "Северная Европа",
+            "Латвия": "Северная Европа",
+            "Литва": "Северная Европа",
+            "Финляндия": "Северная Европа"
+          }
+        ],
+        "loyalty_tier": [
+          {
+            "Базовый": "Стандартный",
+            "Серебряный": "Стандартный",
+            "Золотой": "Премиальный",
+            "Платиновый": "Премиальный"
+          },
+          {
+            "Стандартный": "Любой уровень лояльности",
+            "Премиальный": "Любой уровень лояльности"
+          }
+        ]
+      }
+    },
+    "content:bff6c71b3d401af33d2d976e47272e72326cf923431af89c46a54a2e74c6b2cb": {
+      "source_name": "financial_transactions_90.csv",
+      "dataset_id": "content:bff6c71b3d401af33d2d976e47272e72326cf923431af89c46a54a2e74c6b2cb",
+      "content_fingerprints": [
+        "content:bff6c71b3d401af33d2d976e47272e72326cf923431af89c46a54a2e74c6b2cb",
+        "content:c3debb7cc37383eb61f2a1f93ae057db8d5e4f53d9c78518ab9b3a93577359b2"
+      ],
+      "manual_overrides": {
+        "transaction_id": [
+          "direct_identifier"
+        ],
+        "customer_id": [
+          "direct_identifier"
+        ],
+        "customer_name": [
+          "direct_identifier"
+        ],
+        "age": [
+          "quasi_identifier"
+        ],
+        "city": [
+          "quasi_identifier"
+        ],
+        "region": [
+          "quasi_identifier"
+        ],
+        "customer_segment": [
+          "quasi_identifier"
+        ],
+        "amount_eur": [
+          "sensitive_attribute"
+        ],
+        "transaction_date": [
+          "analytical_attribute"
+        ],
+        "merchant_category": [
+          "analytical_attribute"
+        ],
+        "transaction_type": [
+          "analytical_attribute"
+        ],
+        "channel": [
+          "analytical_attribute"
+        ],
+        "currency": [
+          "analytical_attribute"
+        ],
+        "risk_level": [
+          "analytical_attribute"
+        ],
+        "transaction_status": [
+          "analytical_attribute"
+        ]
+      },
+      "semantic_types": {
+        "transaction_id": "identifier",
+        "customer_id": "identifier",
+        "customer_name": "identifier",
+        "age": "numeric",
+        "city": "categorical",
+        "region": "categorical",
+        "customer_segment": "categorical",
+        "transaction_date": "datetime",
+        "merchant_category": "categorical",
+        "transaction_type": "categorical",
+        "channel": "categorical",
+        "amount_eur": "numeric",
+        "currency": "categorical",
+        "risk_level": "categorical",
+        "transaction_status": "categorical"
+      },
+      "quasi_identifier_groups": [
+        {
+          "id": "c1374183aa",
+          "name": "Контекст транзакции",
+          "attributes": [
+            "age",
+            "city",
+            "region",
+            "customer_segment"
+          ],
+          "source": "manual",
+          "confidence": "ручная",
+          "description": "Одна строка соответствует отдельной операции, а один клиент может иметь несколько строк. Для проверки приватности на уровне человека сначала агрегируйте операции до одной строки на клиента. QI-группа не активирована автоматически.",
+          "external_source_families": [],
+          "attribute_evidence": {},
+          "reasons": [
+            "Одна строка соответствует отдельной операции, а один клиент может иметь несколько строк. Для проверки приватности на уровне человека сначала агрегируйте операции до одной строки на клиента. QI-группа не активирована автоматически.",
+            "Демонстрационная конфигурация; проверьте её соответствие своей модели угроз."
+          ],
+          "unique_tuple_count": null,
+          "unique_tuple_ratio": null,
+          "row_count": null,
+          "active": false,
+          "k_override": null
+        }
+      ]
+    },
+    "content:0a2463856b37dc9c56e6e2516b792b94e90ea9b8453dc39180db092b9a4d3f7f": {
+      "source_name": "employee_training_50.csv",
+      "dataset_id": "content:0a2463856b37dc9c56e6e2516b792b94e90ea9b8453dc39180db092b9a4d3f7f",
+      "content_fingerprints": [
+        "content:0a2463856b37dc9c56e6e2516b792b94e90ea9b8453dc39180db092b9a4d3f7f"
+      ],
+      "manual_overrides": {
+        "employee_id": [
+          "direct_identifier"
+        ],
+        "full_name": [
+          "direct_identifier"
+        ],
+        "work_email": [
+          "direct_identifier"
+        ],
+        "department": [
+          "quasi_identifier"
+        ],
+        "position": [
+          "quasi_identifier"
+        ],
+        "age": [
+          "quasi_identifier"
+        ],
+        "city": [
+          "quasi_identifier"
+        ],
+        "monthly_salary_eur": [
+          "sensitive_attribute"
+        ],
+        "region": [
+          "analytical_attribute"
+        ],
+        "experience_years": [
+          "analytical_attribute"
+        ],
+        "hire_date": [
+          "analytical_attribute"
+        ],
+        "training_program": [
+          "analytical_attribute"
+        ],
+        "training_hours": [
+          "analytical_attribute"
+        ],
+        "assessment_score": [
+          "analytical_attribute"
+        ],
+        "completion_status": [
+          "analytical_attribute"
+        ]
+      },
+      "semantic_types": {
+        "employee_id": "identifier",
+        "full_name": "identifier",
+        "work_email": "identifier",
+        "department": "categorical",
+        "position": "categorical",
+        "age": "numeric",
+        "city": "categorical",
+        "region": "categorical",
+        "monthly_salary_eur": "numeric",
+        "experience_years": "numeric",
+        "hire_date": "datetime",
+        "training_program": "categorical",
+        "training_hours": "numeric",
+        "assessment_score": "numeric",
+        "completion_status": "categorical"
+      },
+      "quasi_identifier_groups": [
+        {
+          "id": "5287a640ff",
+          "name": "Профиль сотрудника",
+          "attributes": [
+            "department",
+            "position",
+            "age",
+            "city"
+          ],
+          "source": "manual",
+          "confidence": "ручная",
+          "description": "Одна строка соответствует одному сотруднику. В группу включены все поля, отмеченные как квази-идентификаторы.",
+          "external_source_families": [],
+          "attribute_evidence": {},
+          "reasons": [
+            "Демонстрационный профиль охватывает подразделение, должность, возраст и город.",
+            "Иерархии обобщения должностей, подразделений и географии входят в комплектный профиль.",
+            "Перед обработкой реальных данных проверьте состав группы по своей модели угроз."
+          ],
+          "unique_tuple_count": null,
+          "unique_tuple_ratio": null,
+          "row_count": null,
+          "active": true,
+          "k_override": null
+        }
+      ],
+      "generalization_hierarchies": {
+        "department": [
+          {
+            "ИТ": "Технические подразделения",
+            "Поддержка": "Операционные подразделения",
+            "Продажи": "Коммерческие подразделения",
+            "Маркетинг": "Коммерческие подразделения",
+            "Финансы": "Корпоративные подразделения"
+          },
+          {
+            "Операционные подразделения": "Подразделения компании",
+            "Корпоративные подразделения": "Подразделения компании",
+            "Технические подразделения": "Подразделения компании",
+            "Коммерческие подразделения": "Подразделения компании"
+          }
+        ],
+        "position": [
+          {
+            "Разработчик": "Технические функции",
+            "Системный администратор": "Технические функции",
+            "Специалист поддержки": "Операционные функции",
+            "Старший специалист": "Операционные функции",
+            "Аккаунт-менеджер": "Коммерческие функции",
+            "Менеджер по продажам": "Коммерческие функции",
+            "Маркетолог": "Коммерческие функции",
+            "Контент-менеджер": "Коммерческие функции",
+            "Аналитик маркетинга": "Коммерческие функции",
+            "Бухгалтер": "Корпоративные функции",
+            "Финансовый аналитик": "Корпоративные функции",
+            "Экономист": "Корпоративные функции",
+            "Руководитель группы": "Руководство",
+            "Руководитель смены": "Руководство",
+            "Аналитик данных": "Аналитические функции"
+          },
+          {
+            "Корпоративные функции": "Функции компании",
+            "Руководство": "Функции компании",
+            "Операционные функции": "Функции компании",
+            "Аналитические функции": "Функции компании",
+            "Технические функции": "Функции компании",
+            "Коммерческие функции": "Функции компании"
+          }
+        ],
+        "city": [
+          {
+            "Таллин": "Харьюмаа",
+            "Тарту": "Тартумаа",
+            "Пярну": "Пярнумаа",
+            "Нарва": "Ида-Вирумаа",
+            "Рига": "Рижский регион",
+            "Лиепая": "Курземе",
+            "Вильнюс": "Вильнюсский регион",
+            "Каунас": "Каунасский регион",
+            "Клайпеда": "Клайпедский регион"
+          },
+          {
+            "Харьюмаа": "Эстония",
+            "Тартумаа": "Эстония",
+            "Пярнумаа": "Эстония",
+            "Ида-Вирумаа": "Эстония",
+            "Рижский регион": "Латвия",
+            "Курземе": "Латвия",
+            "Вильнюсский регион": "Литва",
+            "Каунасский регион": "Литва",
+            "Клайпедский регион": "Литва"
+          },
+          {
+            "Эстония": "Балтийский регион",
+            "Латвия": "Балтийский регион",
+            "Литва": "Балтийский регион"
+          }
+        ]
+      }
+    },
+    "content:3e0b3de945e41a8f54b95bf3babd3e7b05ec3cdb67047de2383446b2ff8d9819": {
+      "source_name": "initial_dataset_anonymized.csv",
+      "manual_overrides": {
+        "customer_id": [
+          "direct_identifier"
+        ],
+        "age": [
+          "quasi_identifier"
+        ],
+        "district": [
+          "quasi_identifier"
+        ],
+        "monthly_income": [
+          "sensitive_attribute"
+        ]
+      },
+      "dataset_id": "content:3e0b3de945e41a8f54b95bf3babd3e7b05ec3cdb67047de2383446b2ff8d9819",
+      "content_fingerprints": [
+        "content:3e0b3de945e41a8f54b95bf3babd3e7b05ec3cdb67047de2383446b2ff8d9819"
+      ],
+      "schema_signature": "1e2098fb08df55cfb7744faf6af7c57d4f62c47d37e92a4da80f66c49c1a33ec"
+    }
+  }
+}

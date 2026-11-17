@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from data_processing.csv_handler import save_csv
+
 from data_analysis.correlation import calculate_correlations
 from data_analysis.descriptive_statistics import (
     calculate_descriptive_statistics,
@@ -111,11 +113,6 @@ def export_analysis_results(
         if table.empty:
             continue
         destination = directory / filename
-        table.to_csv(
-            destination,
-            index=True,
-            index_label=index_label,
-            encoding="utf-8-sig",
-        )
+        save_csv(table, destination, index=True, index_label=index_label)
         outputs.append(destination)
     return outputs

@@ -9,10 +9,13 @@ from uuid import uuid4
 
 from data_processing.attribute_classifier import ROLE_LABELS
 from data_processing.semantic_types import validate_semantic_types
+from infrastructure.file_safety import atomic_write_text, contains_link_component, MAX_JSON_FILE_BYTES
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PROFILE_PATH = PROJECT_ROOT / "data" / "metadata" / "attribute_profiles.json"
+BUNDLED_PROFILE_PATH = PROJECT_ROOT / "data" / "defaults" / "attribute_profiles.json"
+PROFILE_FORMAT_VERSION = 5
 
 
 def _legacy_dataset_path_key(csv_path: str | Path) -> str:
@@ -113,16 +116,35 @@ def dataset_profile_key(csv_path: str | Path) -> str:
     return _content_fingerprint(csv_path) or _legacy_dataset_path_key(csv_path)
 
 
-def _read_registry(path: Path) -> dict:
+def _is_default_registry_path(path: Path) -> bool:
+    return path.expanduser().absolute() == DEFAULT_PROFILE_PATH.absolute()
+
+
+def _load_registry_file(path: Path) -> dict:
+    if contains_link_component(path):
+        raise ValueError("Путь к файлу профилей не должен содержать символические ссылки или junction.")
     if not path.exists():
-        return {"format_version": 4, "datasets": {}}
+        return {"format_version": PROFILE_FORMAT_VERSION, "datasets": {}}
+    if path.stat().st_size > MAX_JSON_FILE_BYTES:
+        raise ValueError("Файл профилей атрибутов превышает допустимый размер 10 МБ.")
     try:
         registry = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ValueError(f"Не удалось прочитать профили атрибутов {path}: {error}") from error
     if not isinstance(registry, dict) or not isinstance(registry.get("datasets", {}), dict):
         raise ValueError("Файл профилей атрибутов имеет некорректную структуру.")
-    registry["format_version"] = max(int(registry.get("format_version", 1)), 4)
+    raw_version = registry.get("format_version", 1)
+    if isinstance(raw_version, bool) or not isinstance(raw_version, int):
+        raise ValueError("Версия формата профилей должна быть целым числом.")
+    version = raw_version
+    if version < 1:
+        raise ValueError("Версия формата профилей должна быть положительной.")
+    if version > PROFILE_FORMAT_VERSION:
+        raise ValueError(
+            f"Формат профилей версии {version} новее поддерживаемой версии "
+            f"{PROFILE_FORMAT_VERSION}. Обновите приложение, не перезаписывая файл."
+        )
+    registry["format_version"] = version
     registry.setdefault("datasets", {})
     for dataset_key, dataset_profile in registry["datasets"].items():
         if not isinstance(dataset_profile, dict):
@@ -130,14 +152,103 @@ def _read_registry(path: Path) -> dict:
     return registry
 
 
+def _migrate_demo_profiles(registry: dict, defaults: dict, old_version: int) -> dict:
+    datasets = registry.setdefault("datasets", {})
+    default_datasets = defaults.get("datasets", {})
+    for dataset_key, default_profile in default_datasets.items():
+        if dataset_key not in datasets:
+            datasets[dataset_key] = deepcopy(default_profile)
+            continue
+        current = datasets[dataset_key]
+        if old_version < PROFILE_FORMAT_VERSION:
+            default_hierarchies = default_profile.get("generalization_hierarchies", {})
+            current_hierarchies = current.setdefault("generalization_hierarchies", {})
+            for column, levels in default_hierarchies.items():
+                current_hierarchies.setdefault(column, deepcopy(levels))
+
+            default_groups = default_profile.get("quasi_identifier_groups", [])
+            current_groups = current.get("quasi_identifier_groups", [])
+            for current_group in current_groups:
+                matching = next((
+                    group for group in default_groups
+                    if group.get("id") == current_group.get("id")
+                ), None)
+                if not matching:
+                    continue
+                old_attributes = {
+                    "retail_customers_orders_60.csv": ["age", "city", "loyalty_tier"],
+                    "employee_training_50.csv": ["department", "age", "city"],
+                }.get(current.get("source_name"), [])
+                if current_group.get("attributes") == old_attributes:
+                    current_group["attributes"] = list(matching.get("attributes", old_attributes))
+                    current_group["description"] = matching.get("description", current_group.get("description", ""))
+                    current_group["reasons"] = deepcopy(matching.get("reasons", current_group.get("reasons", [])))
+
+            if current.get("source_name") == "initial_dataset.csv":
+                old_roles = current.setdefault("manual_overrides", {})
+                legacy_conflict = old_roles.get("customer_id") == [
+                    "direct_identifier", "analytical_attribute"
+                ]
+                if legacy_conflict:
+                    old_roles["customer_id"] = ["direct_identifier"]
+                    for column, default_roles in default_profile.get("manual_overrides", {}).items():
+                        old_roles.setdefault(column, deepcopy(default_roles))
+
+                legacy_groups = {
+                    "demographic_context": ["age"],
+                    "geographic_context": ["district", "monthly_income"],
+                    "socioeconomic_context": ["monthly_income"],
+                    "behavior_transaction_context": ["purchase_amount"],
+                }
+                existing_groups = {
+                    group.get("id"): group.get("attributes")
+                    for group in current.get("quasi_identifier_groups", [])
+                    if isinstance(group, dict)
+                }
+                if existing_groups == legacy_groups:
+                    current["quasi_identifier_groups"] = deepcopy(
+                        default_profile.get("quasi_identifier_groups", [])
+                    )
+                    current_types = current.setdefault("semantic_types", {})
+                    for column, default_type in default_profile.get("semantic_types", {}).items():
+                        current_types.setdefault(column, default_type)
+
+    registry["format_version"] = PROFILE_FORMAT_VERSION
+    return registry
+
+
+def _read_registry(path: Path) -> dict:
+    if contains_link_component(path):
+        raise ValueError("Путь к файлу профилей не должен содержать символические ссылки или junction.")
+
+    is_default_path = _is_default_registry_path(path)
+    if is_default_path:
+        defaults = _load_registry_file(BUNDLED_PROFILE_PATH)
+        if not path.exists():
+            defaults["format_version"] = PROFILE_FORMAT_VERSION
+            return defaults
+    else:
+        defaults = {"format_version": PROFILE_FORMAT_VERSION, "datasets": {}}
+
+    registry = _load_registry_file(path)
+    if is_default_path:
+        registry = _migrate_demo_profiles(
+            registry, defaults, int(registry.get("format_version", 1))
+        )
+    else:
+        registry["format_version"] = max(
+            int(registry.get("format_version", 1)), PROFILE_FORMAT_VERSION
+        )
+    return registry
+
+
 def _write_registry(path: Path, registry: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_suffix(path.suffix + ".tmp")
-    temporary_path.write_text(
+    registry["format_version"] = PROFILE_FORMAT_VERSION
+    atomic_write_text(
+        path,
         json.dumps(registry, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+        create_parents=True,
     )
-    temporary_path.replace(path)
 
 
 def _path_alias(csv_path: str | Path) -> str:
@@ -244,7 +355,7 @@ def _get_or_create_dataset(registry: dict, csv_path: str | Path) -> dict:
     schema = _schema_signature(csv_path)
     if schema:
         dataset["schema_signature"] = schema
-    registry["format_version"] = 4
+    registry["format_version"] = PROFILE_FORMAT_VERSION
     return dataset
 
 

@@ -3,6 +3,8 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
+from infrastructure.file_safety import atomic_write_text, contains_link_component, MAX_JSON_FILE_BYTES
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SETTINGS_PATH = PROJECT_ROOT / "config" / "settings.json"
@@ -17,9 +19,9 @@ class DataTypeAnalysisSettings:
 
 @dataclass(frozen=True)
 class AnonymizationSettings:
-    tokenize_direct_identifiers: bool = True
-    remove_direct_identifiers: bool = False
-    enable_k_anonymity: bool = False
+    tokenize_direct_identifiers: bool = False
+    remove_direct_identifiers: bool = True
+    enable_k_anonymity: bool = True
 
 
 @dataclass(frozen=True)
@@ -27,7 +29,7 @@ class KAnonymizationSettings:
     default_k: int = 5
     max_row_suppression_percent: float = 5.0
     numeric_representative: str = "mean"
-    enable_l_diversity: bool = False
+    enable_l_diversity: bool = True
     default_l: int = 2
     l_diversity_variant: str = "both"
 
@@ -41,8 +43,15 @@ class AppSettings:
 
 def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
     settings_path = Path(path)
+    if contains_link_component(settings_path):
+        raise ValueError("Путь к настройкам не должен содержать символические ссылки или junction.")
     if not settings_path.exists():
         return AppSettings()
+    try:
+        if settings_path.stat().st_size > MAX_JSON_FILE_BYTES:
+            raise ValueError("Файл настроек превышает допустимый размер.")
+    except OSError as error:
+        raise ValueError(f"Не удалось проверить файл настроек: {error}") from error
 
     try:
         raw = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -88,7 +97,7 @@ def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
 
     tokenize_direct_identifiers = anonymization.get(
         "tokenize_direct_identifiers",
-        True,
+        False,
     )
     if not isinstance(tokenize_direct_identifiers, bool):
         raise ValueError(
@@ -96,13 +105,13 @@ def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
         )
     remove_direct_identifiers = anonymization.get(
         "remove_direct_identifiers",
-        False,
+        True,
     )
     if not isinstance(remove_direct_identifiers, bool):
         raise ValueError(
             "Параметр remove_direct_identifiers должен быть логическим."
         )
-    enable_k_anonymity = anonymization.get("enable_k_anonymity", False)
+    enable_k_anonymity = anonymization.get("enable_k_anonymity", True)
     if not isinstance(enable_k_anonymity, bool):
         raise ValueError("Параметр enable_k_anonymity должен быть логическим.")
     if tokenize_direct_identifiers and remove_direct_identifiers:
@@ -128,9 +137,9 @@ def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
     if not math.isfinite(max_row_suppression) or not 0 <= max_row_suppression <= 5:
         raise ValueError("Ограничение подавления строк должно находиться от 0 до 5%.")
     representative = k_anonymization.get("numeric_representative", "mean")
-    if representative not in {"mean", "median", "medoid"}:
+    if not isinstance(representative, str) or representative not in {"mean", "median", "medoid"}:
         raise ValueError("Способ замены числовых значений должен быть mean, median или medoid.")
-    enable_l_diversity = k_anonymization.get("enable_l_diversity", False)
+    enable_l_diversity = k_anonymization.get("enable_l_diversity", True)
     if not isinstance(enable_l_diversity, bool):
         raise ValueError("Параметр enable_l_diversity должен быть логическим.")
     raw_default_l = k_anonymization.get("default_l", 2)
@@ -246,10 +255,8 @@ def save_settings(
             "l_diversity_variant": k_settings.l_diversity_variant,
         },
     }
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = settings_path.with_suffix(settings_path.suffix + ".tmp")
-    temporary_path.write_text(
+    atomic_write_text(
+        settings_path,
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+        create_parents=True,
     )
-    temporary_path.replace(settings_path)

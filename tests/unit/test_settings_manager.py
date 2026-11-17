@@ -27,6 +27,42 @@ class SettingsManagerTests(unittest.TestCase):
             save_settings(expected, path)
             self.assertEqual(load_settings(path), expected)
 
+    def test_user_settings_are_not_reset_between_application_starts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            expected = AppSettings(
+                anonymization=AnonymizationSettings(
+                    tokenize_direct_identifiers=True,
+                    remove_direct_identifiers=False,
+                    enable_k_anonymity=False,
+                ),
+                k_anonymization=KAnonymizationSettings(
+                    enable_l_diversity=False,
+                    default_k=7,
+                    default_l=3,
+                    l_diversity_variant="entropy",
+                ),
+            )
+            save_settings(expected, path)
+
+            first_start = load_settings(path)
+            second_start = load_settings(path)
+
+            self.assertEqual(first_start, expected)
+            self.assertEqual(second_start, expected)
+            self.assertEqual(load_settings(path), expected)
+
+    def test_missing_settings_file_uses_safe_full_anonymization_defaults(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = load_settings(Path(directory) / "missing.json")
+            self.assertFalse(settings.anonymization.tokenize_direct_identifiers)
+            self.assertTrue(settings.anonymization.remove_direct_identifiers)
+            self.assertTrue(settings.anonymization.enable_k_anonymity)
+            self.assertTrue(settings.k_anonymization.enable_l_diversity)
+            self.assertEqual(settings.k_anonymization.default_k, 5)
+            self.assertEqual(settings.k_anonymization.default_l, 2)
+            self.assertEqual(settings.k_anonymization.l_diversity_variant, "both")
+
     def test_invalid_threshold_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
@@ -40,7 +76,7 @@ class SettingsManagerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_settings(path)
 
-    def test_legacy_settings_keep_existing_anonymization_enabled(self):
+    def test_legacy_settings_use_safe_full_anonymization_defaults(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
             path.write_text(
@@ -50,8 +86,10 @@ class SettingsManagerTests(unittest.TestCase):
 
             settings = load_settings(path)
 
-            self.assertTrue(settings.anonymization.tokenize_direct_identifiers)
-            self.assertFalse(settings.anonymization.remove_direct_identifiers)
+            self.assertFalse(settings.anonymization.tokenize_direct_identifiers)
+            self.assertTrue(settings.anonymization.remove_direct_identifiers)
+            self.assertTrue(settings.anonymization.enable_k_anonymity)
+            self.assertTrue(settings.k_anonymization.enable_l_diversity)
 
     def test_anonymization_operation_setting_roundtrips(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -124,12 +162,12 @@ class SettingsManagerTests(unittest.TestCase):
             save_settings(expected, path)
             self.assertEqual(load_settings(path), expected)
 
-    def test_legacy_settings_default_l_diversity_to_disabled(self):
+    def test_legacy_settings_default_l_diversity_to_enabled(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
             path.write_text('{"k_anonymization": {"default_k": 4}}', encoding="utf-8")
             settings = load_settings(path)
-            self.assertFalse(settings.k_anonymization.enable_l_diversity)
+            self.assertTrue(settings.k_anonymization.enable_l_diversity)
             self.assertEqual(settings.k_anonymization.default_l, 2)
             self.assertEqual(settings.k_anonymization.l_diversity_variant, "both")
 
