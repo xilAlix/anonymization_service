@@ -42,7 +42,7 @@ from interfaces.mcp.anonymization_tools import (  # noqa: E402
 
 
 SERVER_INSTRUCTIONS = (
-    "Локальный MCP-сервер сервиса анонимизации 0.6.3. Доступны только CSV в настроенной "
+    "Локальный MCP-сервер сервиса анонимизации 0.6.3.2. Доступны только CSV в настроенной "
     "рабочей папке. Исходные строки и примеры значений не возвращаются инструментами. "
     "Сначала вызовите list_datasets, затем open_dataset и inspect_dataset."
 )
@@ -86,7 +86,7 @@ def create_server(registry: DatasetRegistry):
         title="Сервис анонимизации",
         description="Локальные инструменты изучения CSV, управления профилями, аналитики и анонимизации для GigaChat AI Host.",
         instructions=SERVER_INSTRUCTIONS,
-        version="0.6.3",
+        version="0.6.3.2",
     )
 
     pending_actions = PendingActionStore()
@@ -123,7 +123,7 @@ def create_server(registry: DatasetRegistry):
 
     @mcp_server.tool()
     def get_dataset_profile(dataset_id: str) -> dict[str, Any]:
-        """Возвращает ручные роли, семантические типы, QI-группы и безопасную сводку иерархий."""
+        """Возвращает независимые разделы профиля: ручные роли, семантические типы, сохранённые QI-группы и безопасную сводку иерархий. Ошибка одного раздела не скрывает остальные; возвращает profile_status и section_errors."""
         return get_dataset_profile(registry, dataset_id)
 
     @mcp_server.tool()
@@ -183,12 +183,12 @@ def create_server(registry: DatasetRegistry):
 
     @mcp_server.tool()
     def get_utility_result(dataset_id: str) -> dict[str, Any]:
-        """Возвращает агрегированную оценку полезности с фильтрацией малых групп."""
+        """Сравнивает исходный и анонимизированный набор до/после; возвращает агрегаты с подавлением малых групп и текущий статус Privacy Release Check."""
         return get_utility_result_operation(registry, dataset_id)
 
     @mcp_server.tool()
     def analyze_anonymized_result(dataset_id: str) -> dict[str, Any]:
-        """Запускает существующий анализ уже созданного результата анонимизации."""
+        """Анализирует только итоговую таблицу; для сравнения до/после используйте get_utility_result. При blocked возвращает безопасные статусы блокирующих проверок без метрик."""
         return analyze_anonymized_result_operation(registry, dataset_id)
 
     for uri, resource in RESOURCE_CONTENT.items():
@@ -212,7 +212,7 @@ def _resolve_workspace(argument: str | None) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Локальный MCP Server сервиса анонимизации версии 0.6.3."
+        description="Локальный MCP Server сервиса анонимизации версии 0.6.3.2."
     )
     parser.add_argument(
         "--workspace",

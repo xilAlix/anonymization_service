@@ -1,6 +1,6 @@
 {
   "name": "Сервис анонимизации",
-  "version": "0.6.3",
-  "description": "MCP Server и GigaChat Host с проверкой JSON Schema Function Calling и сохранением целостности истории вызовов инструментов.",
+  "version": "0.6.3.2",
+  "description": "MCP Server и GigaChat Host с локальной маршрутизацией запросов чтения профиля и предсказуемой диагностикой MCP.",
   "python_version": "3.15.2"
 }

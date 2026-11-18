@@ -159,6 +159,37 @@ def serialize_analysis(results, min_group_size: int) -> dict[str, Any]:
     }
 
 
+
+def _release_summary(release: Any) -> dict[str, Any]:
+    if not isinstance(release, dict):
+        return {"privacy_status": "not_checked", "privacy_checks": [], "blocked_checks": [], "warning_checks": []}
+    checks = [
+        {"check": str(item.get("check", "")), "status": str(item.get("status", "unknown"))}
+        for item in release.get("checks", [])
+        if isinstance(item, dict)
+    ]
+    return {
+        "privacy_status": str(release.get("status", "unknown")),
+        "privacy_checks": checks,
+        "blocked_checks": [item["check"] for item in checks if item["status"] == "blocked"],
+        "warning_checks": [item["check"] for item in checks if item["status"] == "warning"],
+    }
+
+
+def _blocked_release_message(summary: dict[str, Any]) -> str:
+    blocked = summary.get("blocked_checks") or []
+    if blocked:
+        checks_text = ", ".join(blocked)
+    else:
+        checks_text = "инструмент не передал названия блокирующих проверок"
+    return (
+        "Подробные метрики сравнения не передаются внешней модели, поскольку текущий "
+        f"Privacy Release Check имеет статус blocked. Блокирующие проверки: {checks_text}. "
+        "Это ограничение передачи подробных метрик. Сам по себе статус blocked не сообщает, "
+        "какие преобразования применились или какие локальные вычисления завершились. "
+        "Безопасные статусы проверок приведены отдельно."
+    )
+
 def analyze_dataset(
     registry: DatasetRegistry,
     dataset_id: str,
@@ -183,19 +214,22 @@ def analyze_anonymized_result(
 ) -> dict[str, Any]:
     try:
         session = registry.get_active_session(dataset_id)
-        if isinstance(session.release_check, dict) and session.release_check.get("status") == "blocked":
+        release_summary = _release_summary(session.release_check)
+        if release_summary["privacy_status"] == "blocked":
             return {
                 "ok": True,
                 "dataset_id": dataset_id,
                 "available": False,
                 "details_withheld": True,
-                "message": "Анализ результата недоступен для внешней модели: Privacy Release Check заблокировал выпуск.",
+                **release_summary,
+                "message": _blocked_release_message(release_summary),
             }
         results = analyze_session_result(session, profile_path)
         threshold = minimum_group_size(registry, dataset_id)
         return {
             "ok": True,
             "dataset_id": dataset_id,
+            **release_summary,
             "analysis": serialize_analysis(results, threshold),
             "anonymized_result": True,
         }
@@ -315,14 +349,25 @@ def serialize_utility(utility, min_group_size: int) -> dict[str, Any]:
 def get_utility_result(registry: DatasetRegistry, dataset_id: str) -> dict[str, Any]:
     try:
         session = registry.get_active_session(dataset_id)
-        if isinstance(session.release_check, dict) and session.release_check.get("status") == "blocked":
+        release_summary = _release_summary(session.release_check)
+        if release_summary["privacy_status"] == "blocked":
             return {
                 "ok": True,
                 "dataset_id": dataset_id,
-                "utility": {"available": False, "details_withheld": True, "message": "Подробная оценка полезности скрыта: Privacy Release Check заблокировал выпуск."},
+                **release_summary,
+                "utility": {
+                    "available": False,
+                    "details_withheld": True,
+                    "message": _blocked_release_message(release_summary),
+                },
             }
         threshold = minimum_group_size(registry, dataset_id)
-        return {"ok": True, "dataset_id": dataset_id, "utility": serialize_utility(session.utility_evaluation, threshold)}
+        return {
+            "ok": True,
+            "dataset_id": dataset_id,
+            **release_summary,
+            "utility": serialize_utility(session.utility_evaluation, threshold),
+        }
     except LookupError:
         return {"ok": False, "error_code": "dataset_not_open", "message": "Сначала откройте CSV."}
 
@@ -333,22 +378,27 @@ def get_privacy_result(registry: DatasetRegistry, dataset_id: str) -> dict[str, 
         release = session.release_check
         if not release:
             return {"ok": True, "available": False, "message": "Privacy Release Check ещё не выполнялся."}
-        status = release.get("status", "unknown")
-        checks = [{"check": item.get("check"), "status": item.get("status")} for item in release.get("checks", [])]
+        summary = _release_summary(release)
+        status = summary["privacy_status"]
+        checks = summary["privacy_checks"]
         if status == "blocked":
             return {
                 "ok": True,
                 "available": True,
-                "status": "blocked",
+                "status": status,
                 "checks": checks,
+                "blocked_checks": summary["blocked_checks"],
+                "warning_checks": summary["warning_checks"],
                 "details_withheld": True,
-                "message": "Подробности проверки заблокированного выпуска не передаются внешней модели.",
+                "message": _blocked_release_message(summary),
             }
         return {
             "ok": True,
             "available": True,
             "status": status,
             "checks": checks,
+            "blocked_checks": summary["blocked_checks"],
+            "warning_checks": summary["warning_checks"],
             "limitations": [
                 "Статус не гарантирует абсолютную анонимность.",
                 "Не проверяются неизвестные внешние источники связывания данных.",

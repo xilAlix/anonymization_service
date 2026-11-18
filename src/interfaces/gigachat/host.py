@@ -154,10 +154,17 @@ def _print_help() -> None:
   /models     показать модели, доступные текущему ключу GigaChat
   /validate-functions  проверить схемы всех MCP-инструментов валидатором GigaChat
   /privacy    показать и изменить согласия на передачу метаданных/агрегатов
+  /groups     локально показать сохранённые QI-группы
+  /roles      локально показать роли атрибутов
+  /hierarchies локально показать сводку иерархий
+  /privacy-status локально показать результат Privacy Release Check
+  /compare    локально сравнить исходную и анонимизированную таблицы
   /clear      очистить историю текущего диалога
   /exit       завершить работу
 
-Обычный текст отправляется GigaChat. Исходные строки CSV не передаются модели.
+Обычный текст отправляется GigaChat. Простые запросы о профиле, QI-группах, иерархиях,
+статусе приватности и сравнении до/после обрабатываются локально и не отправляются модели.
+Исходные строки CSV не передаются модели.
 """.strip(), flush=True)
 
 
@@ -185,7 +192,7 @@ async def _run_chat(workspace: Path, config: AssistantConfig, giga: GigaChatClie
         print(f"GigaChat: {config.gigachat_model}", flush=True)
         print(f"MCP-инструментов: {len(conversation.functions)}", flush=True)
         print("Введи /help для списка команд.", flush=True)
-        print("Важно: текст твоих сообщений отправляется в GigaChat. Не вводи ФИО, email, телефоны и исходные значения CSV.\n", flush=True)
+        print("Важно: команды /groups, /roles, /hierarchies, /privacy-status, /compare и распознанные запросы просмотра/плана обрабатываются локально. Остальные обычные сообщения отправляются в GigaChat. Не вводи ФИО, email, телефоны и исходные значения CSV.\n", flush=True)
 
         local_file_list: list[dict] = []
         while True:
@@ -296,6 +303,16 @@ async def _run_chat(workspace: Path, config: AssistantConfig, giga: GigaChatClie
                 except Exception as error:
                     print(f"Не удалось открыть CSV ({type(error).__name__}). Проверь список и доступность MCP Server.", flush=True)
                 continue
+            local_queries = {
+                "/groups": "Покажи существующие группы квази-идентификаторов, их состав, значения k и статус активности.",
+                "/roles": "Покажи все назначенные роли атрибутов и их семантические типы.",
+                "/hierarchies": "Покажи сводку сохранённых иерархий обобщения квази-идентификаторов.",
+                "/privacy-status": "Покажи текущий статус Privacy Release Check и результаты проверок.",
+                "/compare": "Сравни исходную и анонимизированную таблицы до и после анонимизации.",
+            }
+            if command in local_queries:
+                await conversation.ask(local_queries[command])
+                continue
             if command == "/privacy":
                 gate = conversation.privacy_gate
                 print("\nСогласия текущей консоли:", flush=True)
@@ -319,7 +336,6 @@ async def _run_chat(workspace: Path, config: AssistantConfig, giga: GigaChatClie
                 print("История диалога и ожидающие подтверждения очищены. Текущий CSV сохранён в контексте. Согласия сохранены до выхода.", flush=True)
                 continue
             try:
-                print("GigaChat обрабатывает запрос...", flush=True)
                 await conversation.ask(text)
             except GigaChatAPIError as error:
                 print(f"Ошибка GigaChat: {error}", flush=True)
@@ -329,7 +345,7 @@ async def _run_chat(workspace: Path, config: AssistantConfig, giga: GigaChatClie
 
 def main(argv: list[str] | None = None) -> int:
     _configure_console()
-    parser = argparse.ArgumentParser(description="Консольный AI Host для сервиса анонимизации 0.6.3")
+    parser = argparse.ArgumentParser(description="Консольный AI Host для сервиса анонимизации 0.6.3.2")
     parser.add_argument("--workspace", help="Рабочая папка с CSV")
     parser.add_argument("--model", help="ID модели из списка, доступного GigaChat API")
     parser.add_argument("--scope", choices=["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"])
@@ -340,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         os.chdir(PROJECT_ROOT)
-        print("Anonymization Service AI Host 0.6.3", flush=True)
+        print("Anonymization Service AI Host 0.6.3.2", flush=True)
         print(f"Python: {sys.executable}", flush=True)
         try:
             import mcp  # noqa: F401

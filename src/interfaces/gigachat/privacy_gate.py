@@ -32,8 +32,37 @@ class PrivacyGate:
         if len(serialized) > 12000:
             self.print_func("...локальное представление сокращено на экране.")
 
+    def _sync_release_status(self, dataset_id: str, status: Any) -> None:
+        if not dataset_id or status not in {"ready", "warning", "blocked"}:
+            return
+        if status == "blocked":
+            self.blocked_datasets.add(dataset_id)
+        else:
+            self.blocked_datasets.discard(dataset_id)
+
+    @staticmethod
+    def _safe_release_checks(result: dict[str, Any]) -> list[dict[str, str]]:
+        checks = result.get("privacy_checks") or result.get("checks")
+        if not isinstance(checks, list):
+            privacy = result.get("privacy")
+            checks = privacy.get("checks") if isinstance(privacy, dict) else []
+        return [
+            {"check": str(item.get("check", "")), "status": str(item.get("status", "unknown"))}
+            for item in checks if isinstance(item, dict)
+        ]
+
     def authorize_tool_result(self, tool_name: str, arguments: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
         dataset_id = str(arguments.get("dataset_id") or result.get("dataset_id") or "")
+
+        # Статус текущего запуска авторитетнее старой блокировки в рамках процесса Host.
+        if tool_name == "get_privacy_result" and result.get("available"):
+            self._sync_release_status(dataset_id, result.get("status"))
+        elif tool_name == "execute_anonymization":
+            privacy = result.get("privacy")
+            if isinstance(privacy, dict) and privacy.get("available"):
+                self._sync_release_status(dataset_id, privacy.get("status"))
+        elif tool_name in {"analyze_anonymized_result", "get_utility_result"}:
+            self._sync_release_status(dataset_id, result.get("privacy_status"))
         if not result.get("ok", True):
             code = str(result.get("error_code") or "tool_call_failed")
             safe_messages = {
@@ -54,6 +83,11 @@ class PrivacyGate:
                 "schema_sharing_required": "Сначала отдельно разреши передачу структуры и имён столбцов этого набора.",
                 "invalid_profile_changes": "Изменения профиля не прошли проверку структуры, типов, ролей или QI-групп.",
                 "profile_save_failed": "Профиль не сохранён; подготовь предпросмотр изменений заново.",
+                "profile_read_failed": "Не удалось прочитать профиль набора. Нельзя утверждать, что QI-группы сохранены: проверь локальную диагностику профиля.",
+                "profile_verification_failed": "Изменения профиля были отправлены на сохранение, но повторное чтение не подтвердило их. Не считай создание QI-групп проверенным.",
+                "profile_verification_mismatch": "Профиль прочитан после сохранения, но его содержимое не совпало с подтверждённым предпросмотром. Проверь фактический состав QI-групп.",
+                "analysis_failed": "Не удалось выполнить статистический анализ. Проверь локальный файл и профиль набора.",
+                "result_analysis_failed": "Не удалось проанализировать итоговую анонимизированную таблицу. Проверь наличие результата и локальную диагностику.",
                 "plan_invalid": "Параметры плана анонимизации недопустимы или не согласуются с профилем.",
                 "execution_failed": "Локальное выполнение завершилось ошибкой; подробности остались в локальной диагностике.",
             }
@@ -132,11 +166,23 @@ class PrivacyGate:
             return sanitized
 
         if tool_name in {"analyze_anonymized_result", "get_utility_result"} and dataset_id in self.blocked_datasets:
+            checks = self._safe_release_checks(result)
+            blocked_checks = [item["check"] for item in checks if item["status"] == "blocked"]
+            checks_text = ", ".join(blocked_checks) if blocked_checks else "названия блокирующих проверок не предоставлены"
             return {
                 "ok": True,
+                "dataset_id": dataset_id,
                 "available": False,
                 "details_withheld": True,
-                "message": "Подробная оценка полезности анонимизированного результата не передаётся модели, поскольку Privacy Release Check заблокировал выпуск.",
+                "privacy_status": "blocked",
+                "privacy_checks": checks,
+                "blocked_checks": blocked_checks,
+                "message": (
+                    "Подробные метрики сравнения скрыты, поскольку последний подтверждённый "
+                    f"Privacy Release Check имеет статус blocked. Блокирующие проверки: {checks_text}. "
+                    "Это ограничение передачи подробных метрик; сам статус не сообщает, какие преобразования применились "
+                    "или какие локальные вычисления завершились. Безопасные статусы проверок приведены выше."
+                ),
             }
 
         if tool_name in {"analyze_dataset", "analyze_anonymized_result", "get_utility_result", "get_privacy_result", "prepare_anonymization_plan"}:
@@ -147,8 +193,6 @@ class PrivacyGate:
                     "error_code": "schema_sharing_required",
                     "message": "Сначала отдельно разреши передачу структуры и имён столбцов этого набора.",
                 }
-            if tool_name == "get_privacy_result" and result.get("status") == "blocked":
-                self.blocked_datasets.add(dataset_id)
             if dataset_id not in self.aggregate_consent:
                 preview = self._aggregate_preview(tool_name, result)
                 self._safe_local_summary("Агрегированные сведения для GigaChat:", preview)
@@ -175,16 +219,26 @@ class PrivacyGate:
             sanitized = self._sanitize_paths(result)
             privacy = result.get("privacy", {}) if isinstance(result, dict) else {}
             blocked = isinstance(privacy, dict) and privacy.get("status") == "blocked"
-            if blocked:
-                self.blocked_datasets.add(dataset_id)
+            if isinstance(privacy, dict) and privacy.get("available"):
+                self._sync_release_status(dataset_id, privacy.get("status"))
+            safe_privacy = None
+            if isinstance(privacy, dict) and privacy.get("available"):
+                safe_privacy = {
+                    "ok": bool(privacy.get("ok", True)),
+                    "available": True,
+                    "status": privacy.get("status", "unknown"),
+                    "checks": self._safe_release_checks({"checks": privacy.get("checks", [])}),
+                    "blocked_checks": list(privacy.get("blocked_checks", [])),
+                    "warning_checks": list(privacy.get("warning_checks", [])),
+                    "details_withheld": bool(privacy.get("details_withheld", False)),
+                }
             if (dataset_id not in self.aggregate_consent or blocked) and isinstance(sanitized, dict):
                 for key in ("utility", "rows", "columns", "operations", "affected_columns"):
                     sanitized.pop(key, None)
-                if blocked:
-                    sanitized["privacy"] = {"ok": True, "available": True, "status": "blocked", "details_withheld": True}
-                else:
-                    sanitized.pop("privacy", None)
+                sanitized["privacy"] = safe_privacy or {"ok": True, "available": False}
                 sanitized["evaluation_details_withheld"] = True
+            elif safe_privacy is not None and isinstance(sanitized, dict):
+                sanitized["privacy"] = safe_privacy
             return sanitized
 
         return self._sanitize_paths(sanitize_tool_result(result))

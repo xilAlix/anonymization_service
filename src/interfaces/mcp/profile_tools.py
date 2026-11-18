@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import uuid
 from typing import Any
 
@@ -21,6 +22,9 @@ from infrastructure.attribute_profile_store import (
 )
 from interfaces.mcp.action_store import PendingActionStore
 from interfaces.mcp.registry import DatasetRegistry
+
+
+logger = logging.getLogger(__name__)
 
 
 def _profile_snapshot(session, profile_path: str) -> dict[str, Any]:
@@ -43,20 +47,51 @@ def get_dataset_profile(
     dataset_id: str,
     profile_path: str = str(DEFAULT_PROFILE_PATH),
 ) -> dict[str, Any]:
+    """Возвращает разделы профиля независимо: повреждение одного раздела не скрывает остальные."""
     try:
         session = registry.get_active_session(dataset_id)
-        snapshot = _profile_snapshot(session, profile_path)
     except LookupError:
         return {"ok": False, "error_code": "dataset_not_open", "message": "Сначала откройте CSV."}
-    except (OSError, ValueError):
-        return {"ok": False, "error_code": "profile_read_failed", "message": "Не удалось прочитать профиль набора."}
 
-    # Иерархии содержат реальные значения категорий; модели передаётся только их структура.
-    hierarchy_summary = {
-        column: [{"level": index} for index, _ in enumerate(levels, start=1)]
-        for column, levels in snapshot["hierarchies"].items()
+    loaders = {
+        "roles": lambda: load_manual_role_overrides(session.source_path, profile_path),
+        "semantic_types": lambda: load_semantic_types(session.source_path, profile_path),
+        "qi_groups": lambda: load_quasi_identifier_groups(session.source_path, profile_path),
+        "hierarchies": lambda: load_quasi_identifier_hierarchies(session.source_path, profile_path),
+        "correlation_blocks": lambda: load_quasi_identifier_correlation_blocks(session.source_path, profile_path),
     }
-    safe_groups = [
+    snapshot: dict[str, Any] = {}
+    section_errors: dict[str, str] = {}
+    for section, loader in loaders.items():
+        try:
+            snapshot[section] = loader()
+        except Exception as error:
+            section_errors[section] = type(error).__name__
+            logger.exception(
+                "Не удалось прочитать раздел профиля '%s' для активного набора",
+                section,
+            )
+
+    if not snapshot:
+        return {
+            "ok": False,
+            "error_code": "profile_read_failed",
+            "failed_sections": sorted(section_errors),
+            "message": "Не удалось прочитать ни один раздел профиля. Подробности записаны в локальный журнал MCP.",
+        }
+
+    roles = None if "roles" in section_errors else snapshot.get("roles", {})
+    semantic_types = None if "semantic_types" in section_errors else snapshot.get("semantic_types", {})
+    groups = snapshot.get("qi_groups")
+    hierarchies = snapshot.get("hierarchies", {})
+    correlation_blocks = snapshot.get("correlation_blocks", [])
+
+    # Иерархии содержат реальные категории; наружу передаётся только число уровней.
+    hierarchy_summary = None if "hierarchies" in section_errors else {
+        column: [{"level": index} for index, _ in enumerate(levels, start=1)]
+        for column, levels in hierarchies.items()
+    }
+    safe_groups = None if groups is None else [
         {
             "id": group.get("id"),
             "name": group.get("name"),
@@ -65,19 +100,22 @@ def get_dataset_profile(
             "active": bool(group.get("active", group.get("source") != "automatic")),
             "k_override": group.get("k_override"),
         }
-        for group in snapshot["qi_groups"] if isinstance(group, dict)
+        for group in groups if isinstance(group, dict)
     ]
 
+    complete_snapshot = not section_errors
     return {
         "ok": True,
         "dataset_id": dataset_id,
-        "roles": snapshot["roles"],
-        "semantic_types": snapshot["semantic_types"],
+        "profile_status": "complete" if complete_snapshot else "partial",
+        "roles": roles,
+        "semantic_types": semantic_types,
         "qi_groups": safe_groups,
         "hierarchy_summary": hierarchy_summary,
-        "correlation_blocks": snapshot["correlation_blocks"],
+        "correlation_blocks": correlation_blocks,
+        "section_errors": section_errors,
         "category_mappings_included": False,
-        "profile_digest": profile_digest(snapshot),
+        "profile_digest": profile_digest(snapshot) if complete_snapshot else None,
     }
 
 
