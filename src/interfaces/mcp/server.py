@@ -42,7 +42,7 @@ from interfaces.mcp.anonymization_tools import (  # noqa: E402
 
 
 SERVER_INSTRUCTIONS = (
-    "Локальный MCP-сервер сервиса анонимизации. Доступны только CSV в настроенной "
+    "Локальный MCP-сервер сервиса анонимизации 0.6.3. Доступны только CSV в настроенной "
     "рабочей папке. Исходные строки и примеры значений не возвращаются инструментами. "
     "Сначала вызовите list_datasets, затем open_dataset и inspect_dataset."
 )
@@ -86,7 +86,7 @@ def create_server(registry: DatasetRegistry):
         title="Сервис анонимизации",
         description="Локальные инструменты изучения CSV, управления профилями, аналитики и анонимизации для GigaChat AI Host.",
         instructions=SERVER_INSTRUCTIONS,
-        version="0.6.1",
+        version="0.6.3",
     )
 
     pending_actions = PendingActionStore()
@@ -212,7 +212,7 @@ def _resolve_workspace(argument: str | None) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Локальный MCP Server сервиса анонимизации версии 0.6.1."
+        description="Локальный MCP Server сервиса анонимизации версии 0.6.3."
     )
     parser.add_argument(
         "--workspace",

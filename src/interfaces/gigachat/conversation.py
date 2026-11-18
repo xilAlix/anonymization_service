@@ -7,6 +7,7 @@ from interfaces.gigachat.approvals import confirm_anonymization, confirm_profile
 from interfaces.gigachat.function_bridge import (
     build_gigachat_functions,
     json_for_function_result,
+    normalize_gigachat_arguments,
     parse_function_call,
 )
 from interfaces.gigachat.mcp_client import get_tool_items, mcp_result_to_json
@@ -34,9 +35,11 @@ SYSTEM_PROMPT = """
 5. Для изменения профиля сначала используй preview_profile_changes. Host покажет локальное
    сравнение и отдельно спросит пользователя. apply_profile_changes вызывай только после того,
    как локальный Host подтвердил ответом пользователя. Не передавай и не выдумывай approval_token.
-6. При обновлении qi_groups передавай полный список групп текущего профиля с изменениями:
-   этот раздел заменяет список целиком. Не удаляй существующие группы без явной причины.
-   Иерархии строятся только на категориях, которые инструмент вернул после отдельного согласия.
+6. В preview_profile_changes передавай role_updates и semantic_type_updates как массивы записей
+   с полями column + roles/semantic_type. hierarchy_updates передавай как массив записей
+   column + levels, где levels содержит mappings с value + generalized_value. qi_groups — полный
+   новый список групп и заменяет прежний список целиком. Не удаляй существующие группы без причины.
+   Иерархии строятся только на категориях, полученных после отдельного согласия.
 7. Для анонимизации сначала вызови prepare_anonymization_plan. Объясни операции и параметры.
    execute_anonymization вызывай только после отдельного локального подтверждения пользователя.
    Не утверждай, что действие выполнено, пока инструмент не вернул ok=true.
@@ -71,6 +74,23 @@ class GigaChatConversation:
         self.pending_anonymization_actions: dict[str, dict[str, Any]] = {}
         self.functions: list[dict[str, Any]] = []
         self.function_names: set[str] = set()
+        self.active_dataset_id: str | None = None
+
+    def reset_for_dataset(self, dataset_id: str | None = None) -> None:
+        """Очищает контекст предыдущего набора и привязывает диалог к текущей сессии."""
+        self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        self.pending_profile_actions.clear()
+        self.pending_anonymization_actions.clear()
+        self.active_dataset_id = dataset_id
+        if dataset_id:
+            self.messages.append({
+                "role": "user",
+                "content": (
+                    "Локально открыт новый CSV-набор. Текущий dataset_id: "
+                    f"{dataset_id}. Используй только этот набор. Имя файла и содержимое "
+                    "не передавались модели. Контекст предыдущего набора очищен."
+                ),
+            })
 
     async def initialize(self) -> None:
         result = await self.mcp_client.list_tools()
@@ -121,12 +141,23 @@ class GigaChatConversation:
         self.print_func("Достигнут лимит 8 вызовов инструментов за один запрос. Уточни задачу или продолжи новым сообщением.")
 
     def _trim_history(self) -> None:
-        if len(self.messages) > 61:
-            self.messages = [self.messages[0], *self.messages[-60:]]
+        """Удаляет старые целые ходы, не разрывая пары function_call/function."""
+        while len(self.messages) > 61:
+            body = self.messages[1:]
+            user_positions = [
+                index for index, message in enumerate(body)
+                if message.get("role") == "user"
+            ]
+            if len(user_positions) < 2:
+                # Один пользовательский ход сам по себе ограничен лимитом
+                # вызовов инструментов; не режем его посередине.
+                break
+            next_turn_start = user_positions[1]
+            self.messages = [self.messages[0], *body[next_turn_start:]]
 
     async def _invoke(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        args = dict(arguments)
         try:
+            args = normalize_gigachat_arguments(name, arguments)
             if name == "apply_profile_changes":
                 return await self._apply_profile_changes(args)
             if name == "execute_anonymization":
@@ -154,6 +185,13 @@ class GigaChatConversation:
             if name == "prepare_anonymization_plan" and not authorized.get("ok"):
                 self.pending_anonymization_actions.pop(str(result.get("plan_id") or ""), None)
             return authorized
+        except ValueError:
+            self.print_func(f"Аргументы инструмента {name} не прошли локальную проверку.")
+            return {
+                "ok": False,
+                "error_code": "invalid_tool_arguments",
+                "message": "Аргументы инструмента имеют неверную структуру или повторяющиеся записи. Исправь аргументы и повтори вызов.",
+            }
         except Exception as error:
             # Подробности остаются в локальной консоли и никогда не попадают в GigaChat.
             self.print_func(

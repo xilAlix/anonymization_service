@@ -108,6 +108,15 @@ class GigaChatClient:
                 )
             elif error.code == 401:
                 message = "GigaChat отклонил авторизацию (HTTP 401). Проверь Authorization Key и API scope."
+            elif error.code == 422 and isinstance(detail, str) and "does not support functions" in detail.casefold():
+                message = (
+                    "Выбранная модель не поддерживает Function Calling. Выбери модель генерации диалога "
+                    "из /models; Embeddings-модели для чата недоступны."
+                )
+            elif error.code == 422:
+                message = f"GigaChat отклонил формат запроса (HTTP 422). Проверь /validate-functions."
+                if isinstance(detail, str) and detail:
+                    message += " Детали: " + detail[:240]
             else:
                 message = f"GigaChat API вернул HTTP {error.code}."
                 if isinstance(detail, str) and detail:
@@ -180,13 +189,38 @@ class GigaChatClient:
             raise GigaChatAPIError("GigaChat API вернул некорректный список моделей.")
         models: list[str] = []
         for item in data:
-            if isinstance(item, dict):
-                model_id = item.get("id") or item.get("id_")
-                if isinstance(model_id, str) and model_id and model_id not in models:
-                    models.append(model_id)
+            if not isinstance(item, dict):
+                continue
+            model_id = item.get("id") or item.get("id_")
+            if not isinstance(model_id, str) or not model_id or model_id in models:
+                continue
+            # /models возвращает также embedding-модели. Они предназначены для
+            # /embeddings и не поддерживают /chat/completions с Function Calling.
+            if "embedding" in model_id.casefold() or "эмбеддинг" in model_id.casefold():
+                continue
+            models.append(model_id)
         if not models:
-            raise GigaChatAPIError("GigaChat API не вернул доступных моделей для этого ключа и scope.")
+            raise GigaChatAPIError(
+                "GigaChat API не вернул доступных моделей генерации диалога для этого ключа и scope."
+            )
         return models
+
+    def validate_function(self, function: dict[str, Any]) -> dict[str, Any]:
+        """Проверяет одну пользовательскую функцию официальным валидатором GigaChat."""
+        if not isinstance(function, dict) or not isinstance(function.get("name"), str):
+            raise ValueError("Для проверки GigaChat нужна корректная функция.")
+        token = self._get_access_token()
+        request = Request(
+            f"{self.api_base}/v1/functions/validate",
+            data=json.dumps(function, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        return self._request_json(request)
 
     def chat(self, messages: list[dict[str, Any]], functions: list[dict[str, Any]]) -> dict[str, Any]:
         if not self.model:
