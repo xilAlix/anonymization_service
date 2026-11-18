@@ -1,6 +1,6 @@
 {
   "name": "Сервис анонимизации",
-  "version": "0.6.2",
-  "description": "Консольный AI Host с проверкой Authorization Key, автоматическим выбором доступной модели GigaChat, настраиваемым TLS CA bundle и локальным MCP Server.",
+  "version": "0.6.2.1",
+  "description": "Консольный AI Host с тайм-аутом только на запуск и инициализацию MCP; время диалога не ограничивается.",
   "python_version": "3.15.2"
 }

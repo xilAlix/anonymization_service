@@ -3,11 +3,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import getpass
+from contextlib import AsyncExitStack
 import os
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+MCP_STARTUP_TIMEOUT_SECONDS = 35
+MCP_INITIALIZE_TIMEOUT_SECONDS = 20
 SRC_DIRECTORY = PROJECT_ROOT / "src"
 if str(SRC_DIRECTORY) not in sys.path:
     sys.path.insert(0, str(SRC_DIRECTORY))
@@ -159,137 +162,141 @@ def _print_help() -> None:
 
 async def _run_chat(workspace: Path, config: AssistantConfig, giga: GigaChatClient) -> int:
     print("\n[4/4] Подключение к локальному MCP Server...", flush=True)
-    try:
-        async with asyncio.timeout(35):
-            async with connect_mcp(workspace) as mcp_client:
+    async with AsyncExitStack() as stack:
+        try:
+            async with asyncio.timeout(MCP_STARTUP_TIMEOUT_SECONDS):
+                mcp_client = await stack.enter_async_context(connect_mcp(workspace))
                 print("MCP Server запущен; получение списка инструментов...", flush=True)
                 conversation = GigaChatConversation(giga, mcp_client, workspace)
-                await asyncio.wait_for(conversation.initialize(), timeout=20)
-                print("\nПодключение готово.", flush=True)
-                print(f"Python: {sys.executable}", flush=True)
+                await asyncio.wait_for(
+                    conversation.initialize(),
+                    timeout=MCP_INITIALIZE_TIMEOUT_SECONDS,
+                )
+        except TimeoutError:
+            raise RuntimeError(
+                "Истекло время запуска или инициализации MCP Server. Проверь установку зависимостей "
+                "текущего Python и запуск Host из корня проекта через .venv."
+            ) from None
+
+        print("\nПодключение готово.", flush=True)
+        print(f"Python: {sys.executable}", flush=True)
+        print(f"Рабочая папка: {workspace}", flush=True)
+        print(f"GigaChat: {config.gigachat_model}", flush=True)
+        print(f"MCP-инструментов: {len(conversation.functions)}", flush=True)
+        print("Введи /help для списка команд.", flush=True)
+        print("Важно: текст твоих сообщений отправляется в GigaChat. Не вводи ФИО, email, телефоны и исходные значения CSV.\n", flush=True)
+
+        local_file_list: list[dict] = []
+        while True:
+            try:
+                text = input("ты> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nЗавершение работы.", flush=True)
+                break
+            if not text:
+                continue
+            command = text.casefold()
+            if command in {"/exit", "/quit", "/выход"}:
+                break
+            if command == "/help":
+                _print_help()
+                continue
+            if command == "/workspace":
                 print(f"Рабочая папка: {workspace}", flush=True)
-                print(f"GigaChat: {config.gigachat_model}", flush=True)
-                print(f"MCP-инструментов: {len(conversation.functions)}", flush=True)
-                print("Введи /help для списка команд.", flush=True)
-                print("Важно: текст твоих сообщений отправляется в GigaChat. Не вводи ФИО, email, телефоны и исходные значения CSV.\n", flush=True)
-
-                local_file_list: list[dict] = []
-                while True:
-                    try:
-                        text = input("ты> ").strip()
-                    except (EOFError, KeyboardInterrupt):
-                        print("\nЗавершение работы.", flush=True)
-                        break
-                    if not text:
+                continue
+            if command == "/models":
+                print("Доступные модели:", flush=True)
+                for model in giga.list_models():
+                    print(f"  - {model}", flush=True)
+                continue
+            if command == "/files":
+                result = await mcp_client.call_tool("list_datasets", {})
+                from interfaces.gigachat.mcp_client import mcp_result_to_json
+                payload = mcp_result_to_json(result)
+                if payload.get("ok"):
+                    local_file_list = payload.get("datasets", [])
+                    print("\nCSV в рабочей папке (локально, без передачи GigaChat):", flush=True)
+                    for index, item in enumerate(local_file_list, start=1):
+                        print(f"  {index}. {item.get('name')}  ({item.get('size_bytes')} байт)", flush=True)
+                    print("Выбери набор командой /open <номер или точное имя>.", flush=True)
+                else:
+                    print(payload.get("message", "Не удалось получить список CSV."), flush=True)
+                continue
+            if command.startswith("/open "):
+                selector = text[6:].strip().strip('"')
+                if not local_file_list:
+                    result = await mcp_client.call_tool("list_datasets", {})
+                    from interfaces.gigachat.mcp_client import mcp_result_to_json
+                    local_file_list = mcp_result_to_json(result).get("datasets", [])
+                selected = None
+                if selector.isdigit():
+                    index = int(selector) - 1
+                    if 0 <= index < len(local_file_list):
+                        selected = local_file_list[index]
+                else:
+                    matches = [item for item in local_file_list if str(item.get("name", "")).casefold() == selector.casefold()]
+                    if len(matches) == 1:
+                        selected = matches[0]
+                    elif len(matches) > 1:
+                        print("Имя неоднозначно. Выбери CSV по номеру через /files.", flush=True)
                         continue
-                    command = text.casefold()
-                    if command in {"/exit", "/quit", "/выход"}:
-                        break
-                    if command == "/help":
-                        _print_help()
-                        continue
-                    if command == "/workspace":
-                        print(f"Рабочая папка: {workspace}", flush=True)
-                        continue
-                    if command == "/models":
-                        print("Доступные модели:", flush=True)
-                        for model in giga.list_models():
-                            print(f"  - {model}", flush=True)
-                        continue
-                    if command == "/files":
-                        result = await mcp_client.call_tool("list_datasets", {})
-                        from interfaces.gigachat.mcp_client import mcp_result_to_json
-                        payload = mcp_result_to_json(result)
-                        if payload.get("ok"):
-                            local_file_list = payload.get("datasets", [])
-                            print("\nCSV в рабочей папке (локально, без передачи GigaChat):", flush=True)
-                            for index, item in enumerate(local_file_list, start=1):
-                                print(f"  {index}. {item.get('name')}  ({item.get('size_bytes')} байт)", flush=True)
-                            print("Выбери набор командой /open <номер или точное имя>.", flush=True)
-                        else:
-                            print(payload.get("message", "Не удалось получить список CSV."), flush=True)
-                        continue
-                    if command.startswith("/open "):
-                        selector = text[6:].strip().strip('"')
-                        if not local_file_list:
-                            result = await mcp_client.call_tool("list_datasets", {})
-                            from interfaces.gigachat.mcp_client import mcp_result_to_json
-                            local_file_list = mcp_result_to_json(result).get("datasets", [])
-                        selected = None
-                        if selector.isdigit():
-                            index = int(selector) - 1
-                            if 0 <= index < len(local_file_list):
-                                selected = local_file_list[index]
-                        else:
-                            matches = [item for item in local_file_list if str(item.get("name", "")).casefold() == selector.casefold()]
-                            if len(matches) == 1:
-                                selected = matches[0]
-                            elif len(matches) > 1:
-                                print("Имя неоднозначно. Выбери CSV по номеру через /files.", flush=True)
-                                continue
-                        if not selected:
-                            print("Файл не найден. Выполни /files и выбери номер или точное имя.", flush=True)
-                            continue
-                        result = await mcp_client.call_tool("open_dataset", {"dataset_id": selected["dataset_id"]})
-                        from interfaces.gigachat.mcp_client import mcp_result_to_json
-                        opened = mcp_result_to_json(result)
-                        if opened.get("ok"):
-                            dataset_id = str(opened.get("dataset_id"))
-                            conversation.messages.append({
-                                "role": "user",
-                                "content": "Пользователь локально выбрал и открыл CSV. Текущий dataset_id: " + dataset_id + ". Используй этот набор. Имя файла и его содержимое не передавались модели.",
-                            })
-                            print(f"Открыт локально: {selected.get('name')} ({opened.get('rows')} строк × {opened.get('columns')} столбцов).", flush=True)
-                            print("Чтобы продолжить исследование, напиши запрос обычным текстом. Передача структуры и агрегатов будет отдельно согласована.", flush=True)
-                        else:
-                            print(opened.get("message", "Не удалось открыть CSV."), flush=True)
-                        continue
-                    if command == "/privacy":
-                        gate = conversation.privacy_gate
-                        print("\nСогласия текущей консоли:", flush=True)
-                        print(f"  Список имён CSV: {'разрешён' if gate.catalog_consent else 'не разрешён'}", flush=True)
-                        print(f"  Структура наборов: {len(gate.schema_consent)} набор(а/ов)", flush=True)
-                        print(f"  Агрегаты: {len(gate.aggregate_consent)} набор(а/ов)", flush=True)
-                        print(f"  Отдельные наборы категорий: {len(gate.category_consent)}", flush=True)
-                        action = input("Отозвать все согласия до завершения консоли? [да/Н]: ").strip().casefold()
-                        if action in {"да", "д", "y", "yes"}:
-                            gate.catalog_consent = False
-                            gate.schema_consent.clear()
-                            gate.aggregate_consent.clear()
-                            gate.category_consent.clear()
-                            gate.blocked_datasets.clear()
-                            from interfaces.gigachat.conversation import SYSTEM_PROMPT
-                            conversation.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-                            conversation.pending_profile_actions.clear()
-                            conversation.pending_anonymization_actions.clear()
-                            print("Согласия отозваны; локальная история диалога и ожидающие подтверждения очищены.", flush=True)
-                            print("Ранее отправленные в GigaChat сведения уже были переданы и этим действием не отзываются.", flush=True)
-                        continue
-                    if command == "/clear":
-                        from interfaces.gigachat.conversation import SYSTEM_PROMPT
-                        conversation.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-                        conversation.pending_profile_actions.clear()
-                        conversation.pending_anonymization_actions.clear()
-                        print("История диалога и ожидающие подтверждения очищены. Согласия сохранены до выхода.", flush=True)
-                        continue
-                    try:
-                        print("GigaChat обрабатывает запрос...", flush=True)
-                        await conversation.ask(text)
-                    except GigaChatAPIError as error:
-                        print(f"Ошибка GigaChat: {error}", flush=True)
-                    except (OSError, RuntimeError, ValueError) as error:
-                        print(f"Ошибка взаимодействия: {error}", flush=True)
-    except TimeoutError:
-        raise RuntimeError(
-            "Истекло время подключения к MCP Server. Проверь установку зависимостей текущего Python "
-            "и запусти Host из корня проекта через .venv."
-        ) from None
+                if not selected:
+                    print("Файл не найден. Выполни /files и выбери номер или точное имя.", flush=True)
+                    continue
+                result = await mcp_client.call_tool("open_dataset", {"dataset_id": selected["dataset_id"]})
+                from interfaces.gigachat.mcp_client import mcp_result_to_json
+                opened = mcp_result_to_json(result)
+                if opened.get("ok"):
+                    dataset_id = str(opened.get("dataset_id"))
+                    conversation.messages.append({
+                        "role": "user",
+                        "content": "Пользователь локально выбрал и открыл CSV. Текущий dataset_id: " + dataset_id + ". Используй этот набор. Имя файла и его содержимое не передавались модели.",
+                    })
+                    print(f"Открыт локально: {selected.get('name')} ({opened.get('rows')} строк × {opened.get('columns')} столбцов).", flush=True)
+                    print("Чтобы продолжить исследование, напиши запрос обычным текстом. Передача структуры и агрегатов будет отдельно согласована.", flush=True)
+                else:
+                    print(opened.get("message", "Не удалось открыть CSV."), flush=True)
+                continue
+            if command == "/privacy":
+                gate = conversation.privacy_gate
+                print("\nСогласия текущей консоли:", flush=True)
+                print(f"  Список имён CSV: {'разрешён' if gate.catalog_consent else 'не разрешён'}", flush=True)
+                print(f"  Структура наборов: {len(gate.schema_consent)} набор(а/ов)", flush=True)
+                print(f"  Агрегаты: {len(gate.aggregate_consent)} набор(а/ов)", flush=True)
+                print(f"  Отдельные наборы категорий: {len(gate.category_consent)}", flush=True)
+                action = input("Отозвать все согласия до завершения консоли? [да/Н]: ").strip().casefold()
+                if action in {"да", "д", "y", "yes"}:
+                    gate.catalog_consent = False
+                    gate.schema_consent.clear()
+                    gate.aggregate_consent.clear()
+                    gate.category_consent.clear()
+                    gate.blocked_datasets.clear()
+                    from interfaces.gigachat.conversation import SYSTEM_PROMPT
+                    conversation.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+                    conversation.pending_profile_actions.clear()
+                    conversation.pending_anonymization_actions.clear()
+                    print("Согласия отозваны; локальная история диалога и ожидающие подтверждения очищены.", flush=True)
+                    print("Ранее отправленные в GigaChat сведения уже были переданы и этим действием не отзываются.", flush=True)
+                continue
+            if command == "/clear":
+                from interfaces.gigachat.conversation import SYSTEM_PROMPT
+                conversation.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+                conversation.pending_profile_actions.clear()
+                conversation.pending_anonymization_actions.clear()
+                print("История диалога и ожидающие подтверждения очищены. Согласия сохранены до выхода.", flush=True)
+                continue
+            try:
+                print("GigaChat обрабатывает запрос...", flush=True)
+                await conversation.ask(text)
+            except GigaChatAPIError as error:
+                print(f"Ошибка GigaChat: {error}", flush=True)
+            except (OSError, RuntimeError, ValueError) as error:
+                print(f"Ошибка взаимодействия: {error}", flush=True)
     return 0
-
 
 def main(argv: list[str] | None = None) -> int:
     _configure_console()
-    parser = argparse.ArgumentParser(description="Консольный AI Host для сервиса анонимизации 0.6.2")
+    parser = argparse.ArgumentParser(description="Консольный AI Host для сервиса анонимизации 0.6.2.1")
     parser.add_argument("--workspace", help="Рабочая папка с CSV")
     parser.add_argument("--model", help="ID модели из списка, доступного GigaChat API")
     parser.add_argument("--scope", choices=["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"])
@@ -300,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         os.chdir(PROJECT_ROOT)
-        print("Anonymization Service AI Host 0.6.2", flush=True)
+        print("Anonymization Service AI Host 0.6.2.1", flush=True)
         print(f"Python: {sys.executable}", flush=True)
         try:
             import mcp  # noqa: F401
