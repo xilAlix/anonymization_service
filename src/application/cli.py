@@ -47,6 +47,7 @@ from application.session_workflow import DatasetSession
 from data_analysis.descriptive_statistics import detect_date_format
 from application.k_anonymization_workflow import (
     LDiversityViolationError,
+    TClosenessViolationError,
     evaluate_current_k,
     evaluate_current_l,
     save_k_anonymity_report,
@@ -384,6 +385,11 @@ def build_parser() -> argparse.ArgumentParser:
     k_anonymize_parser.set_defaults(enable_l_diversity=None)
     k_anonymize_parser.add_argument("--l", type=int, help="Переопределить значение l (само по себе включает l-проверку).")
     k_anonymize_parser.add_argument("--l-variant", choices=("distinct", "entropy", "both"), help="Вариант l-проверки.")
+    t_group = k_anonymize_parser.add_mutually_exclusive_group()
+    t_group.add_argument("--t-closeness", dest="enable_t_closeness", action="store_true", help="Включить t-близость.")
+    t_group.add_argument("--no-t-closeness", dest="enable_t_closeness", action="store_false", help="Отключить t-близость.")
+    k_anonymize_parser.set_defaults(enable_t_closeness=None)
+    k_anonymize_parser.add_argument("--t", type=float, help="Порог t от 0 до 1; автоматически включает t-близость.")
     k_anonymize_parser.add_argument("--overwrite", action="store_true", help="Разрешить перезапись выходного CSV и отчёта.")
 
     k_evaluate_parser = subparsers.add_parser(
@@ -430,6 +436,11 @@ def build_parser() -> argparse.ArgumentParser:
     selected_anonymize_parser.set_defaults(enable_l_diversity=None)
     selected_anonymize_parser.add_argument("--l", type=int, help="Переопределить значение l (само по себе включает l-проверку).")
     selected_anonymize_parser.add_argument("--l-variant", choices=("distinct", "entropy", "both"), help="Вариант l-проверки.")
+    selected_t_group = selected_anonymize_parser.add_mutually_exclusive_group()
+    selected_t_group.add_argument("--t-closeness", dest="enable_t_closeness", action="store_true", help="Включить t-близость.")
+    selected_t_group.add_argument("--no-t-closeness", dest="enable_t_closeness", action="store_false", help="Отключить t-близость.")
+    selected_anonymize_parser.set_defaults(enable_t_closeness=None)
+    selected_anonymize_parser.add_argument("--t", type=float, help="Порог t от 0 до 1; автоматически включает t-близость.")
     selected_anonymize_parser.add_argument(
         "--overwrite",
         action="store_true",
@@ -442,9 +453,12 @@ def build_parser() -> argparse.ArgumentParser:
 def _print_session_evaluation(outcome) -> None:
     release = outcome.release_check
     print(f"Оценка приватности: {release['status_label']} ({release['status']}).")
+    status_labels = {"passed": "пройдена", "warning": "предупреждение", "blocked": "заблокирована"}
     for check in release.get("checks", []):
-        if check.get("status") != "passed":
-            print(f"  {check.get('check')}: {check.get('details')}")
+        label = status_labels.get(check.get("status"), check.get("status", "неизвестно"))
+        details = check.get("details")
+        suffix = f" — {details}" if details and check.get("status") != "passed" else ""
+        print(f"  {check.get('check')}: {label}{suffix}")
     summary = outcome.utility.summary
     print(
         "Оценка полезности: "
@@ -851,6 +865,12 @@ def run_cli(arguments: list[str]) -> int:
                 enable_l_diversity = True
             l_value = args.l if args.l is not None else settings.k_anonymization.default_l
             l_variant = args.l_variant or settings.k_anonymization.l_diversity_variant
+            enable_t_closeness = settings.k_anonymization.enable_t_closeness if args.enable_t_closeness is None else args.enable_t_closeness
+            if args.t is not None:
+                enable_t_closeness = True
+            t_value = args.t if args.t is not None else settings.k_anonymization.default_t
+            if not 0 <= t_value <= 1:
+                raise ValueError("Порог t должен быть от 0 до 1.")
             if k_value < 2:
                 raise ValueError("k должно быть не меньше 2.")
 
@@ -875,6 +895,8 @@ def run_cli(arguments: list[str]) -> int:
                 enable_l_diversity=enable_l_diversity,
                 default_l=l_value,
                 l_variant=l_variant,
+                enable_t_closeness=enable_t_closeness,
+                default_t=t_value,
                 profile_path=PROFILE_PATH,
                 overwrite=args.overwrite,
             )
@@ -894,7 +916,7 @@ def run_cli(arguments: list[str]) -> int:
             print(f"Результат: {output_path}")
             print(f"Подробный отчёт: {report_path}")
             _print_session_evaluation(outcome)
-            print("Важно: k-анонимность и l-разнообразие не гарантируют невозможность повторной идентификации.")
+            print("Важно: k-анонимность, l-разнообразие и t-близость не гарантируют невозможность повторной идентификации.")
             return 0
 
         if args.command == "anonymize-selected":
@@ -925,6 +947,12 @@ def run_cli(arguments: list[str]) -> int:
             representative = args.representative or settings.k_anonymization.numeric_representative
             l_value = args.l if args.l is not None else settings.k_anonymization.default_l
             l_variant = args.l_variant or settings.k_anonymization.l_diversity_variant
+            enable_t_closeness = settings.k_anonymization.enable_t_closeness if args.enable_t_closeness is None else args.enable_t_closeness
+            if args.t is not None:
+                enable_t_closeness = True
+            t_value = args.t if args.t is not None else settings.k_anonymization.default_t
+            if not 0 <= t_value <= 1:
+                raise ValueError("Порог t должен быть от 0 до 1.")
             report_path = None
             if K_ANONYMITY in selected_operations:
                 report_path = (
@@ -950,6 +978,8 @@ def run_cli(arguments: list[str]) -> int:
                 enable_l_diversity=enable_l_diversity,
                 default_l=l_value,
                 l_variant=l_variant,
+                enable_t_closeness=enable_t_closeness,
+                default_t=t_value,
                 profile_path=PROFILE_PATH,
                 overwrite=args.overwrite,
             )
@@ -1015,12 +1045,13 @@ def run_cli(arguments: list[str]) -> int:
             _print_session_evaluation(outcome)
             return 0
 
-    except LDiversityViolationError as error:
+    except (LDiversityViolationError, TClosenessViolationError) as error:
         print(f"Ошибка: {error}", file=sys.stderr)
         output_csv = getattr(args, "output_csv", None)
         report_path = getattr(args, "report_json", None)
         if report_path is None and output_csv is not None:
-            report_path = output_csv.with_name(output_csv.stem + "_l_diversity_failed_report.json")
+            suffix = "_t_closeness_failed_report.json" if isinstance(error, TClosenessViolationError) else "_l_diversity_failed_report.json"
+            report_path = output_csv.with_name(output_csv.stem + suffix)
         if report_path is not None:
             try:
                 safe_report_path = validate_output_file(report_path)

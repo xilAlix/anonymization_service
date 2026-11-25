@@ -90,6 +90,8 @@ class SettingsWindow(tk.Toplevel):
         self.l_diversity_variant = tk.StringVar(
             value=L_VARIANT_LABELS[settings.k_anonymization.l_diversity_variant]
         )
+        self.enable_t_closeness = tk.BooleanVar(value=settings.k_anonymization.enable_t_closeness)
+        self.default_t = tk.StringVar(value=f"{settings.k_anonymization.default_t:g}")
         self.l_entropy_hint = tk.StringVar()
 
         shell = ttk.Frame(self, style="Settings.TFrame")
@@ -389,6 +391,40 @@ class SettingsWindow(tk.Toplevel):
             "значений и требует H(S) ≥ ln(l). «Оба» означает, что должны пройти оба критерия.",
         )
 
+        self.t_closeness_check = ttk.Checkbutton(
+            k_frame,
+            text="Проверять t-близость после k-анонимизации",
+            variable=self.enable_t_closeness,
+            command=self._toggle_t_controls,
+        )
+        self.t_closeness_check.grid(row=12, column=0, columnspan=2, sticky="w", pady=(18, 0))
+        ToolTip(
+            self.t_closeness_check,
+            "Сравнивает распределение каждого конфиденциального атрибута внутри QI-класса "
+            "с общим распределением. Числовые/временные поля проверяются нормализованной EMD, "
+            "номинальные категории — расстоянием полной вариации. При превышении t CSV не сохраняется.",
+        )
+        tk.Label(
+            k_frame,
+            text="Порог t (от 0 до 1):",
+            background="#F0F3F7",
+            foreground="#20384D",
+        ).grid(row=14, column=0, sticky="w", pady=(10, 0))
+        self.default_t_input = ttk.Spinbox(
+            k_frame,
+            from_=0,
+            to=1,
+            increment=0.05,
+            textvariable=self.default_t,
+            width=12,
+            justify="right",
+        )
+        self.default_t_input.grid(row=14, column=1, sticky="w", padx=(16, 0), pady=(10, 0))
+        ToolTip(
+            self.default_t_input,
+            "Максимально допустимое расстояние между локальным и общим распределениями. "
+            "Меньшее значение означает более строгое требование.",
+        )
 
         buttons = ttk.Frame(shell, style="Settings.TFrame", padding=(18, 10, 18, 16))
         buttons.grid(row=1, column=0, columnspan=2, sticky="ew")
@@ -400,6 +436,7 @@ class SettingsWindow(tk.Toplevel):
 
         self._toggle_threshold()
         self._toggle_l_controls()
+        self._toggle_t_controls()
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.grab_set()
         self.update_idletasks()
@@ -459,6 +496,9 @@ class SettingsWindow(tk.Toplevel):
         self.default_l_input.configure(state=state)
         self.l_variant_select.configure(state="readonly" if state == "normal" else "disabled")
         self._update_l_entropy_hint()
+
+    def _toggle_t_controls(self) -> None:
+        self.default_t_input.configure(state="normal" if self.enable_t_closeness.get() else "disabled")
 
     def _update_l_entropy_hint(self, *_args) -> None:
         try:
@@ -543,6 +583,15 @@ class SettingsWindow(tk.Toplevel):
             )
             return
 
+        try:
+            default_t = float(self.default_t.get().replace(",", "."))
+        except ValueError:
+            messagebox.showerror("Некорректное значение", "Порог t должен быть числом от 0 до 1.", parent=self)
+            return
+        if not 0 <= default_t <= 1:
+            messagebox.showerror("Некорректное значение", "Порог t должен быть от 0 до 1.", parent=self)
+            return
+
         settings = AppSettings(
             data_type_analysis=DataTypeAnalysisSettings(
                 detect_nominal_attributes=self.detect_nominal.get(),
@@ -561,6 +610,8 @@ class SettingsWindow(tk.Toplevel):
                 enable_l_diversity=self.enable_l_diversity.get(),
                 default_l=default_l,
                 l_diversity_variant=L_VARIANT_VALUES[self.l_diversity_variant.get()],
+                enable_t_closeness=self.enable_t_closeness.get(),
+                default_t=default_t,
             ),
         )
         try:

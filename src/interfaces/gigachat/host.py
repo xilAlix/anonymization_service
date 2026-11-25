@@ -158,7 +158,7 @@ def _print_help() -> None:
   /roles      локально показать роли атрибутов
   /hierarchies локально показать сводку иерархий
   /privacy-status локально показать результат Privacy Release Check
-  /compare    локально сравнить исходную и анонимизированную таблицы
+  /compare    локально вывести готовую Markdown-таблицу сравнения до/после
   /clear      очистить историю текущего диалога
   /exit       завершить работу
 
@@ -192,7 +192,7 @@ async def _run_chat(workspace: Path, config: AssistantConfig, giga: GigaChatClie
         print(f"GigaChat: {config.gigachat_model}", flush=True)
         print(f"MCP-инструментов: {len(conversation.functions)}", flush=True)
         print("Введи /help для списка команд.", flush=True)
-        print("Важно: команды /groups, /roles, /hierarchies, /privacy-status, /compare и распознанные запросы просмотра/плана обрабатываются локально. Остальные обычные сообщения отправляются в GigaChat. Не вводи ФИО, email, телефоны и исходные значения CSV.\n", flush=True)
+        print("Важно: команды /groups, /roles, /hierarchies, /privacy-status и /compare обрабатываются локально. /compare выводит готовую Markdown-таблицу через MCP get_utility_table. Остальные обычные сообщения отправляются в GigaChat. Не вводи ФИО, email, телефоны и исходные значения CSV.\n", flush=True)
 
         local_file_list: list[dict] = []
         while True:
@@ -345,7 +345,7 @@ async def _run_chat(workspace: Path, config: AssistantConfig, giga: GigaChatClie
 
 def main(argv: list[str] | None = None) -> int:
     _configure_console()
-    parser = argparse.ArgumentParser(description="Консольный AI Host для сервиса анонимизации 0.6.3.2")
+    parser = argparse.ArgumentParser(description="Консольный AI Host для сервиса анонимизации 0.7.0")
     parser.add_argument("--workspace", help="Рабочая папка с CSV")
     parser.add_argument("--model", help="ID модели из списка, доступного GigaChat API")
     parser.add_argument("--scope", choices=["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"])
@@ -356,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         os.chdir(PROJECT_ROOT)
-        print("Anonymization Service AI Host 0.6.3.2", flush=True)
+        print("Anonymization Service AI Host 0.7.0", flush=True)
         print(f"Python: {sys.executable}", flush=True)
         try:
             import mcp  # noqa: F401

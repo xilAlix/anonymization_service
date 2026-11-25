@@ -7,6 +7,7 @@ import pandas as pd
 
 from application.k_anonymization_workflow import (
     LDiversityViolationError,
+    TClosenessViolationError,
     save_k_anonymity_report,
 )
 from application.anonymization_workflow import (
@@ -37,6 +38,7 @@ from application.session_workflow import DatasetSession
 from interfaces.gui.analysis_results_view import AnalysisResultsView, DataFrameTable, DateColumnDialog
 from interfaces.gui.session_evaluation_view import SessionEvaluationView
 from interfaces.gui.l_diversity_results_view import LDiversityResultsWindow
+from interfaces.gui.t_closeness_results_view import TClosenessResultsWindow
 from data_analysis.descriptive_statistics import inspect_date_columns
 from interfaces.gui.attribute_classification_window import AttributeClassificationWindow
 from interfaces.gui.column_types_window import ColumnTypesWindow
@@ -102,6 +104,7 @@ class TableViewer(tk.Tk):
         self.attribute_classification_window: AttributeClassificationWindow | None = None
         self.quasi_identifier_groups_window: QuasiIdentifierGroupsWindow | None = None
         self.l_diversity_window: LDiversityResultsWindow | None = None
+        self.t_closeness_window: TClosenessResultsWindow | None = None
 
         self.title("Сервис анонимизации")
         self.geometry("1120x700")
@@ -709,15 +712,24 @@ class TableViewer(tk.Tk):
                     "Применится при отдельном запуске k-анонимизации через меню «Операции»"
                 )
 
-        details = f"{summary}  |  {l_summary}"
+        if not k_settings.enable_t_closeness:
+            t_summary = "t-проверка: выключена"
+        else:
+            t_summary = f"t-проверка: включена (t={k_settings.default_t:g})"
+            if anonymization.enable_k_anonymity:
+                t_summary += " и войдёт в суммарный запуск"
+            else:
+                t_summary += "; включится при отдельном запуске k-анонимизации"
+
+        details = f"{summary}  |  {l_summary}  |  {t_summary}"
         if anonymization.enable_k_anonymity and not active_qi_profiles:
             details += (
                 "  |  Нет активных QI-групп - откройте «Операции» → «Группы QI» "
                 "и подтвердите или создайте группу"
             )
-        elif k_settings.enable_l_diversity and not active_qi_profiles:
+        elif (k_settings.enable_l_diversity or k_settings.enable_t_closeness) and not active_qi_profiles:
             details += (
-                "  |  Нет активных QI-групп - l нельзя проверить до подтверждения группы"
+                "  |  Нет активных QI-групп — проверки l и t нельзя выполнить до подтверждения группы"
             )
 
         if k_settings.enable_l_diversity:
@@ -747,6 +759,10 @@ class TableViewer(tk.Tk):
                     "  |  Не входят в l как прямые идентификаторы: "
                     + ", ".join(excluded_from_l)
                 )
+        if k_settings.enable_t_closeness:
+            details += f"  |  t-близость: включена (t={k_settings.default_t:g})"
+        else:
+            details += "  |  t-близость: выключена"
         self.plan_info.set(details)
 
     def run_k_anonymization(self) -> None:
@@ -804,21 +820,25 @@ class TableViewer(tk.Tk):
                 enable_l_diversity=self.settings.k_anonymization.enable_l_diversity,
                 default_l=self.settings.k_anonymization.default_l,
                 l_variant=self.settings.k_anonymization.l_diversity_variant,
+                enable_t_closeness=self.settings.k_anonymization.enable_t_closeness,
+                default_t=self.settings.k_anonymization.default_t,
                 overwrite=destination.exists(),
             )
             result = outcome.execution.dataframe
             report = outcome.execution.k_report or {}
-        except LDiversityViolationError as error:
+        except (LDiversityViolationError, TClosenessViolationError) as error:
             report_path = self._save_l_failure_report(error.report, destination)
             details = str(error)
             if report_path is not None:
                 details += f"\n\nДиагностический отчёт сохранён: {report_path}"
             else:
                 details += "\n\nCSV не создан. Диагностический отчёт не сохранён."
-            messagebox.showerror(
-                "Проверка l-разнообразия не пройдена", details, parent=self
-            )
-            self._show_l_diversity_diagnostics(error.report.get("l_diversity", {}))
+            title = "Проверка t-близости не пройдена" if isinstance(error, TClosenessViolationError) else "Проверка l-разнообразия не пройдена"
+            messagebox.showerror(title, details, parent=self)
+            if isinstance(error, LDiversityViolationError):
+                self._show_l_diversity_diagnostics(error.report.get("l_diversity", {}))
+            else:
+                self._show_t_closeness_diagnostics(error.report.get("t_closeness", {}))
             return
         except (OSError, ValueError, RuntimeError) as error:
             messagebox.showerror("k-анонимизация не выполнена", str(error), parent=self)
@@ -827,9 +847,10 @@ class TableViewer(tk.Tk):
         self._show_anonymized_result(result, destination)
         self._offer_k_report(report, destination)
         l_status = report.get("l_diversity", {}).get("status", "not_checked")
+        t_status = report.get("t_closeness", {}).get("status", "not_checked")
         self.status.set(
             f"k-анонимизация завершена: {len(report.get('profiles', []))} QI-профилей; "
-            f"l-проверка: {l_status}. Результат: {destination.name}"
+            f"l-проверка: {l_status}; t-проверка: {t_status}. Результат: {destination.name}"
         )
 
     def _offer_k_report(self, report: dict, csv_path: Path) -> Path | None:
@@ -863,9 +884,12 @@ class TableViewer(tk.Tk):
         return report_path
 
     def _save_l_failure_report(self, report: dict, csv_destination: Path) -> Path | None:
-        report_path = csv_destination.with_name(
-            csv_destination.stem + "_l_diversity_failed_report.json"
-        )
+        t_report = report.get("t_closeness")
+        if isinstance(t_report, dict) and t_report.get("status") == "failed":
+            suffix = "_t_closeness_failed_report.json"
+        else:
+            suffix = "_l_diversity_failed_report.json"
+        report_path = csv_destination.with_name(csv_destination.stem + suffix)
         if report_path.exists() and not messagebox.askyesno(
             "Перезапись диагностического отчёта",
             f"Отчёт уже существует:\n{report_path}\n\nПерезаписать?",
@@ -899,15 +923,20 @@ class TableViewer(tk.Tk):
             )
             return
 
-        if (
-            self.settings.k_anonymization.enable_l_diversity
-            and K_ANONYMITY not in selected_operations
-        ):
+        skipped_checks = []
+        if K_ANONYMITY not in selected_operations:
+            if self.settings.k_anonymization.enable_l_diversity:
+                skipped_checks.append("l-разнообразие")
+            if self.settings.k_anonymization.enable_t_closeness:
+                skipped_checks.append("t-близость")
+        if skipped_checks:
+            checks_text = " и ".join(skipped_checks)
             proceed = messagebox.askyesno(
-                "l-проверка не будет выполнена",
-                "l-разнообразие включено в настройках, но k-анонимизация "
-                "не выбрана для суммарного запуска. Поэтому l-проверка сейчас "
-                "не выполнится. Продолжить выбранные операции без неё?",
+                "Проверки приватности не будут выполнены",
+                f"{checks_text.capitalize()} включены в настройках, но k-анонимизация "
+                f"не выбрана для суммарного запуска. Эти проверки не выполняются "
+                "самостоятельно, поскольку требуют классов эквивалентности. "
+                "Продолжить выбранные операции без них?",
                 parent=self,
             )
             if not proceed:
@@ -925,7 +954,7 @@ class TableViewer(tk.Tk):
             if not active_qi_profiles:
                 messagebox.showerror(
                     "Нет активных QI-групп",
-                    "k-анонимизация и l-проверка не будут выполнены. "
+                    "k-анонимизация, l-разнообразие и t-близость не будут выполнены. "
                     "Откройте меню «Операции» → «Группы квази-идентификаторов...», "
                     "подтвердите хотя бы одну группу и повторите запуск.",
                     parent=self,
@@ -972,6 +1001,11 @@ class TableViewer(tk.Tk):
                 ),
                 default_l=self.settings.k_anonymization.default_l,
                 l_variant=self.settings.k_anonymization.l_diversity_variant,
+                enable_t_closeness=(
+                    self.settings.k_anonymization.enable_t_closeness
+                    and K_ANONYMITY in operations
+                ),
+                default_t=self.settings.k_anonymization.default_t,
             )
         except (OSError, ValueError, RuntimeError) as error:
             messagebox.showerror("План анонимизации не прошёл проверку", str(error), parent=self)
@@ -1041,10 +1075,12 @@ class TableViewer(tk.Tk):
                 enable_l_diversity=self.settings.k_anonymization.enable_l_diversity,
                 default_l=self.settings.k_anonymization.default_l,
                 l_variant=self.settings.k_anonymization.l_diversity_variant,
+                enable_t_closeness=self.settings.k_anonymization.enable_t_closeness,
+                default_t=self.settings.k_anonymization.default_t,
                 overwrite=destination.exists(),
             )
             execution = outcome.execution
-        except LDiversityViolationError as error:
+        except (LDiversityViolationError, TClosenessViolationError) as error:
             report_path = self._save_l_failure_report(error.report, destination)
             details = str(error)
             details += (
@@ -1052,10 +1088,12 @@ class TableViewer(tk.Tk):
                 if report_path is not None
                 else "\n\nCSV не создан. Диагностический отчёт не сохранён."
             )
-            messagebox.showerror(
-                "Проверка l-разнообразия не пройдена", details, parent=self
-            )
-            self._show_l_diversity_diagnostics(error.report.get("l_diversity", {}))
+            title = "Проверка t-близости не пройдена" if isinstance(error, TClosenessViolationError) else "Проверка l-разнообразия не пройдена"
+            messagebox.showerror(title, details, parent=self)
+            if isinstance(error, LDiversityViolationError):
+                self._show_l_diversity_diagnostics(error.report.get("l_diversity", {}))
+            else:
+                self._show_t_closeness_diagnostics(error.report.get("t_closeness", {}))
             return
         except (OSError, ValueError, RuntimeError) as error:
             messagebox.showerror(
@@ -1077,7 +1115,8 @@ class TableViewer(tk.Tk):
         status_detail = ""
         if execution.k_report is not None:
             l_status = execution.k_report.get("l_diversity", {}).get("status", "not_checked")
-            status_detail = f" Л-проверка: {l_status}."
+            t_status = execution.k_report.get("t_closeness", {}).get("status", "not_checked")
+            status_detail = f" l-проверка: {l_status}; t-проверка: {t_status}."
         if TOKENIZE_DIRECT_IDENTIFIERS in execution.operations:
             status_detail += " Токенизация является псевдонимизацией."
         self.status.set(
@@ -1090,6 +1129,13 @@ class TableViewer(tk.Tk):
         if self.l_diversity_window is not None and self.l_diversity_window.winfo_exists():
             self.l_diversity_window.destroy()
         self.l_diversity_window = LDiversityResultsWindow(self, report)
+
+    def _show_t_closeness_diagnostics(self, report: dict) -> None:
+        if report.get("status") not in {"satisfied", "failed", "not_evaluable"}:
+            return
+        if self.t_closeness_window is not None and self.t_closeness_window.winfo_exists():
+            self.t_closeness_window.destroy()
+        self.t_closeness_window = TClosenessResultsWindow(self, report)
 
     def show_attribute_classification(self) -> None:
         if self.current_dataframe is None or self.current_file_path is None:

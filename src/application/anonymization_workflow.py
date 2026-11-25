@@ -103,6 +103,8 @@ def apply_anonymization_operations(
     enable_l_diversity: bool = False,
     default_l: int = 2,
     l_variant: str = "both",
+    enable_t_closeness: bool = False,
+    default_t: float = 0.4,
 ) -> AnonymizationExecutionResult:
     if not operations:
         raise ValueError("Не выбрана ни одна операция анонимизации.")
@@ -149,6 +151,8 @@ def apply_anonymization_operations(
             enable_l_diversity=enable_l_diversity,
             default_l=default_l,
             l_variant=l_variant,
+            enable_t_closeness=enable_t_closeness,
+            default_t=default_t,
         )
         for component in k_report.get("components", []):
             affected_columns.extend(component.get("attributes", []))

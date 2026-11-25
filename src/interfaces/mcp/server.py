@@ -23,7 +23,7 @@ from interfaces.mcp.action_store import PendingActionStore  # noqa: E402
 from interfaces.mcp.profile_tools import (  # noqa: E402
     apply_profile_changes as apply_profile_changes_operation,
     get_category_values_tool,
-    get_dataset_profile,
+    get_dataset_profile as get_dataset_profile_operation,
     preview_profile_changes as preview_profile_changes_operation,
     suggest_attribute_roles as suggest_attribute_roles_operation,
     suggest_qi_groups_tool,
@@ -34,6 +34,7 @@ from interfaces.mcp.analysis_tools import (  # noqa: E402
     analyze_dataset as analyze_dataset_operation,
     get_privacy_result as get_privacy_result_operation,
     get_utility_result as get_utility_result_operation,
+    get_utility_table as get_utility_table_operation,
 )
 from interfaces.mcp.anonymization_tools import (  # noqa: E402
     execute_anonymization as execute_anonymization_operation,
@@ -42,7 +43,7 @@ from interfaces.mcp.anonymization_tools import (  # noqa: E402
 
 
 SERVER_INSTRUCTIONS = (
-    "Локальный MCP-сервер сервиса анонимизации 0.6.3.2. Доступны только CSV в настроенной "
+    "Локальный MCP-сервер сервиса анонимизации 0.7.0. Доступны только CSV в настроенной "
     "рабочей папке. Исходные строки и примеры значений не возвращаются инструментами. "
     "Сначала вызовите list_datasets, затем open_dataset и inspect_dataset."
 )
@@ -50,7 +51,7 @@ SERVER_INSTRUCTIONS = (
 RESOURCE_CONTENT = {
     "anonymization://capabilities": {
         "name": "Возможности сервиса",
-        "content": "Сервис обрабатывает табличные CSV. Доступны локальное открытие и осмотр структуры набора. Алгоритмы анонимизации и статистического анализа уже реализованы в основном приложении и не переписываются MCP-слоем.",
+        "content": "Сервис обрабатывает табличные CSV. Доступны локальное открытие и осмотр структуры набора. Алгоритмы анонимизации и статистического анализа выполняются основным приложением; MCP предоставляет типизированные инструменты и готовое форматирование сравнительных таблиц.",
     },
     "anonymization://attribute-roles": {
         "name": "Роли атрибутов",
@@ -62,7 +63,7 @@ RESOURCE_CONTENT = {
     },
     "anonymization://privacy-methods": {
         "name": "Методы приватности",
-        "content": "Сервис реализует токенизацию, удаление прямых идентификаторов, k-анонимизацию и проверку l-разнообразия (Distinct, Entropy, Both). Токенизация является псевдонимизацией. Статус проверки не является абсолютной гарантией анонимности.",
+        "content": "Сервис реализует токенизацию, удаление прямых идентификаторов, k-анонимизацию, l-разнообразие (Distinct, Entropy, Both) и t-близость. Для числовых/временных чувствительных атрибутов t-близость использует нормализованную EMD; для номинальных категориальных — TVD. Токенизация является псевдонимизацией. Статус проверки не является абсолютной гарантией анонимности.",
     },
     "anonymization://workflow": {
         "name": "Порядок обработки",
@@ -86,7 +87,7 @@ def create_server(registry: DatasetRegistry):
         title="Сервис анонимизации",
         description="Локальные инструменты изучения CSV, управления профилями, аналитики и анонимизации для GigaChat AI Host.",
         instructions=SERVER_INSTRUCTIONS,
-        version="0.6.3.2",
+        version="0.7.0",
     )
 
     pending_actions = PendingActionStore()
@@ -124,7 +125,7 @@ def create_server(registry: DatasetRegistry):
     @mcp_server.tool()
     def get_dataset_profile(dataset_id: str) -> dict[str, Any]:
         """Возвращает независимые разделы профиля: ручные роли, семантические типы, сохранённые QI-группы и безопасную сводку иерархий. Ошибка одного раздела не скрывает остальные; возвращает profile_status и section_errors."""
-        return get_dataset_profile(registry, dataset_id)
+        return get_dataset_profile_operation(registry, dataset_id)
 
     @mcp_server.tool()
     def get_category_values(dataset_id: str, column: str, minimum_frequency: int = 5) -> dict[str, Any]:
@@ -155,11 +156,14 @@ def create_server(registry: DatasetRegistry):
         enable_l_diversity: bool = True,
         default_l: int = 2,
         l_variant: str = "both",
+        enable_t_closeness: bool = True,
+        default_t: float = 0.4,
     ) -> dict[str, Any]:
         """Подготавливает план существующей анонимизации без выполнения и сохранения файла."""
         return prepare_anonymization_plan_operation(
             registry, pending_actions, dataset_id, operations, default_k,
             representative, enable_l_diversity, default_l, l_variant,
+            enable_t_closeness, default_t,
         )
 
     @mcp_server.tool()
@@ -174,6 +178,18 @@ def create_server(registry: DatasetRegistry):
         return execute_anonymization_operation(
             registry, pending_actions, dataset_id, plan_id, approval_token,
             destination, overwrite,
+        )
+
+    @mcp_server.tool()
+    def get_utility_table(
+        dataset_id: str,
+        attributes: list[str] | None = None,
+        metrics: list[str] | None = None,
+        include_correlations: bool = False,
+    ) -> dict[str, Any]:
+        """Возвращает готовую Markdown-таблицу сравнения до/после. Можно выбрать атрибуты и показатели; значения форматируются приложением с учётом подавления малых групп. Передайте markdown_table пользователю без ручного переформатирования."""
+        return get_utility_table_operation(
+            registry, dataset_id, attributes, metrics, include_correlations
         )
 
     @mcp_server.tool()
@@ -212,7 +228,7 @@ def _resolve_workspace(argument: str | None) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Локальный MCP Server сервиса анонимизации версии 0.6.3.2."
+        description="Локальный MCP Server сервиса анонимизации версии 0.7.0."
     )
     parser.add_argument(
         "--workspace",

@@ -8,6 +8,7 @@ from application.anonymization_workflow import (
     REMOVE_DIRECT_IDENTIFIERS,
     TOKENIZE_DIRECT_IDENTIFIERS,
 )
+from application.k_anonymization_workflow import LDiversityViolationError, TClosenessViolationError
 from application.service import execute_anonymization_for_session, prepare_anonymization_plan as prepare_plan
 from infrastructure.attribute_profile_store import DEFAULT_PROFILE_PATH
 from interfaces.mcp.action_store import PendingActionStore
@@ -28,6 +29,8 @@ def prepare_anonymization_plan(
     enable_l_diversity: bool = True,
     default_l: int = 2,
     l_variant: str = "both",
+    enable_t_closeness: bool = True,
+    default_t: float = 0.4,
     profile_path: str | Path | None = None,
 ) -> dict[str, Any]:
     try:
@@ -39,6 +42,8 @@ def prepare_anonymization_plan(
             enable_l_diversity=enable_l_diversity,
             default_l=default_l,
             l_variant=l_variant,
+            enable_t_closeness=enable_t_closeness,
+            default_t=default_t,
             **({"profile_path": profile_path} if profile_path else {}),
         )
         snapshot = _profile_snapshot(session, str(profile_path or DEFAULT_PROFILE_PATH))
@@ -52,6 +57,8 @@ def prepare_anonymization_plan(
                 "enable_l_diversity": enable_l_diversity,
                 "default_l": default_l,
                 "l_variant": l_variant,
+                "enable_t_closeness": enable_t_closeness,
+                "default_t": default_t,
             },
             profile_digest=profile_digest(snapshot),
         )
@@ -109,6 +116,8 @@ def execute_anonymization(
             enable_l_diversity=plan["enable_l_diversity"],
             default_l=plan["default_l"],
             l_variant=plan["l_variant"],
+            enable_t_closeness=plan["enable_t_closeness"],
+            default_t=plan["default_t"],
             **({"profile_path": profile_file} if profile_file else {}),
             overwrite=overwrite,
         )
@@ -132,5 +141,31 @@ def execute_anonymization(
         return {"ok": False, "error_code": "dataset_not_open", "message": "Сессия закрыта или исходный CSV изменился."}
     except PermissionError:
         return {"ok": False, "error_code": "approval_invalid", "message": "Подтверждение запуска недействительно."}
+    except LDiversityViolationError as error:
+        report = error.report.get("l_diversity", error.report)
+        return {
+            "ok": False,
+            "error_code": "privacy_check_failed",
+            "check": "l_diversity",
+            "status": report.get("status", "failed"),
+            "failed_check_count": report.get("failed_check_count"),
+            "check_count": report.get("check_count"),
+            "message": str(error),
+            "csv_saved": False,
+        }
+    except TClosenessViolationError as error:
+        report = error.report.get("t_closeness", error.report)
+        return {
+            "ok": False,
+            "error_code": "privacy_check_failed",
+            "check": "t_closeness",
+            "status": report.get("status", "failed"),
+            "t": report.get("t"),
+            "failed_check_count": report.get("failed_check_count"),
+            "check_count": report.get("check_count"),
+            "maximum_distance": report.get("maximum_distance"),
+            "message": str(error),
+            "csv_saved": False,
+        }
     except (OSError, ValueError) as error:
         return {"ok": False, "error_code": "execution_failed", "message": str(error)}

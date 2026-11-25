@@ -277,8 +277,22 @@ def serialize_utility(utility, min_group_size: int) -> dict[str, Any]:
             "variance_change_percent": _json_value(row.get("Изменение дисперсии, %")),
             "median_before": _json_value(row.get("Медиана до")),
             "median_after": _json_value(row.get("Медиана после")),
+            "q1_before": _json_value(row.get("Q1 до")),
+            "q1_after": _json_value(row.get("Q1 после")),
+            "q3_before": _json_value(row.get("Q3 до")),
+            "q3_after": _json_value(row.get("Q3 после")),
             "iqr_before": _json_value(row.get("IQR до")),
             "iqr_after": _json_value(row.get("IQR после")),
+            "stddev_before": _json_value(row.get("Стандартное отклонение до")),
+            "stddev_after": _json_value(row.get("Стандартное отклонение после")),
+            "skewness_before": _json_value(row.get("Асимметрия до")),
+            "skewness_after": _json_value(row.get("Асимметрия после")),
+            "kurtosis_before": _json_value(row.get("Эксцесс до")),
+            "kurtosis_after": _json_value(row.get("Эксцесс после")),
+            "entropy_bits_before": _json_value(row.get("Энтропия до, бит")),
+            "entropy_bits_after": _json_value(row.get("Энтропия после, бит")),
+            "mode_frequency_before": _json_value(row.get("Частота моды до, %")),
+            "mode_frequency_after": _json_value(row.get("Частота моды после, %")),
             "categorical_distribution_tvd": _json_value(row.get("TVD категорий")),
             "suppressed": False,
         }
@@ -286,19 +300,17 @@ def serialize_utility(utility, min_group_size: int) -> dict[str, Any]:
         missing_after = transformed_rows - n_after
         if missing_before == 0 or missing_before >= min_group_size:
             item["non_null_before"] = n_before
+            item["missing_count_before"] = missing_before
+            item["missing_percent_before"] = _json_value(row.get("Пропуски до, %"))
         else:
             item["non_null_before_withheld"] = True
+            item["missing_before_withheld"] = True
         if missing_after == 0 or missing_after >= min_group_size:
             item["non_null_after"] = n_after
+            item["missing_count_after"] = missing_after
+            item["missing_percent_after"] = _json_value(row.get("Пропуски после, %"))
         else:
             item["non_null_after_withheld"] = True
-        if missing_before >= min_group_size:
-            item["missing_percent_before"] = _json_value(row.get("Пропуски до, %"))
-        elif missing_before:
-            item["missing_before_withheld"] = True
-        if missing_after >= min_group_size:
-            item["missing_percent_after"] = _json_value(row.get("Пропуски после, %"))
-        elif missing_after:
             item["missing_after_withheld"] = True
 
         unique_before = _json_value(row.get("Уникальных до"))
@@ -371,6 +383,184 @@ def get_utility_result(registry: DatasetRegistry, dataset_id: str) -> dict[str, 
     except LookupError:
         return {"ok": False, "error_code": "dataset_not_open", "message": "Сначала откройте CSV."}
 
+
+
+UTILITY_TABLE_FIELDS = {
+    "non_null": ("Непустые значения", "non_null_before", "non_null_after", "count"),
+    "missing_count": ("Пропуски", "missing_count_before", "missing_count_after", "count"),
+    "missing_percent": ("Пропуски, %", "missing_percent_before", "missing_percent_after", "number"),
+    "unique": ("Уникальные значения", "unique_before", "unique_after", "count"),
+    "mean": ("Среднее", "mean_before", "mean_after", "number"),
+    "variance": ("Выборочная дисперсия", "variance_before", "variance_after", "number"),
+    "stddev": ("Стандартное отклонение", "stddev_before", "stddev_after", "number"),
+    "median": ("Медиана", "median_before", "median_after", "number"),
+    "q1": ("Q1 (25%)", "q1_before", "q1_after", "number"),
+    "q3": ("Q3 (75%)", "q3_before", "q3_after", "number"),
+    "iqr": ("IQR", "iqr_before", "iqr_after", "number"),
+    "skewness": ("Асимметрия", "skewness_before", "skewness_after", "number"),
+    "kurtosis": ("Эксцесс", "kurtosis_before", "kurtosis_after", "number"),
+    "entropy": ("Энтропия, бит", "entropy_bits_before", "entropy_bits_after", "number"),
+    "mode_frequency": ("Частота моды, %", "mode_frequency_before", "mode_frequency_after", "number"),
+}
+
+
+def _table_cell(value: Any, kind: str = "number") -> str:
+    if value is None:
+        return "не рассчитано"
+    if isinstance(value, bool):
+        return "да" if value else "нет"
+    if isinstance(value, (int, float)):
+        if kind == "count":
+            return f"{int(value):,}".replace(",", " ")
+        return f"{float(value):,.2f}".replace(",", " ").replace(".", ",")
+    return str(value).replace("|", "\\|").replace("\n", " ")
+
+
+def get_utility_table(
+    registry: DatasetRegistry,
+    dataset_id: str,
+    attributes: list[str] | None = None,
+    metrics: list[str] | None = None,
+    include_correlations: bool = False,
+) -> dict[str, Any]:
+    """Формирует готовую Markdown-таблицу по сохранённой оценке полезности."""
+    result = get_utility_result(registry, dataset_id)
+    if not result.get("ok"):
+        return result
+    utility = result.get("utility", {})
+    if not utility.get("available") or utility.get("details_withheld"):
+        return {
+            "ok": True,
+            "available": False,
+            "privacy_status": result.get("privacy_status", "unknown"),
+            "message": utility.get("message", "Сравнение недоступно."),
+            "markdown_table": None,
+        }
+
+    selected_metrics = metrics or [
+        "mean", "variance", "stddev", "median", "q1", "q3", "iqr", "unique", "missing_count", "missing_percent", "entropy"
+    ]
+    unknown_metrics = [metric for metric in selected_metrics if metric not in UTILITY_TABLE_FIELDS]
+    if unknown_metrics:
+        return {
+            "ok": False,
+            "error_code": "unsupported_metrics",
+            "message": "Неизвестные показатели: " + ", ".join(unknown_metrics),
+            "supported_metrics": sorted(UTILITY_TABLE_FIELDS),
+        }
+
+    attribute_rows = utility.get("attributes", [])
+    requested = set(attributes or [])
+    available_names = [item.get("attribute") for item in attribute_rows]
+    if requested:
+        unknown_attributes = sorted(requested - set(available_names))
+        if unknown_attributes:
+            return {
+                "ok": False,
+                "error_code": "unknown_attributes",
+                "message": "Запрошенные атрибуты отсутствуют в сравнении: " + ", ".join(unknown_attributes),
+                "available_attributes": available_names,
+            }
+        attribute_rows = [item for item in attribute_rows if item.get("attribute") in requested]
+
+    lines = [
+        "| Атрибут | Показатель | До анонимизации | После анонимизации | Изменение | Изменение, % |",
+        "|---|---|---:|---:|---:|---:|",
+    ]
+    table_rows: list[dict[str, Any]] = []
+    for item in attribute_rows:
+        attribute = _table_cell(str(item.get("attribute", "—")), "text")
+        if item.get("suppressed"):
+            lines.append(f"| {attribute} | Все показатели | подавлено | подавлено | — | — |")
+            table_rows.append({"attribute": attribute, "suppressed": True})
+            continue
+        for metric in selected_metrics:
+            label, before_key, after_key, value_kind = UTILITY_TABLE_FIELDS[metric]
+            before = item.get(before_key)
+            after = item.get(after_key)
+            suppressed = (
+                (item.get("unique_before_withheld") or item.get("unique_after_withheld"))
+                if metric == "unique" else False
+            ) or (
+                (item.get("missing_before_withheld") or item.get("missing_after_withheld"))
+                if metric in {"missing_count", "missing_percent"} else False
+            )
+            if suppressed:
+                before_text = after_text = "подавлено"
+                delta_text = percent_text = "—"
+                delta = percent = None
+            else:
+                before_text = _table_cell(before, value_kind)
+                after_text = _table_cell(after, value_kind)
+                if isinstance(before, (int, float)) and isinstance(after, (int, float)):
+                    delta = float(after) - float(before)
+                    percent = (delta / abs(float(before)) * 100.0) if abs(float(before)) > 1e-15 else None
+                    delta_text = _table_cell(delta, "count" if value_kind == "count" else "number")
+                    percent_text = _table_cell(percent) + "%" if percent is not None else "не рассчитано"
+                else:
+                    delta = percent = None
+                    delta_text = percent_text = "не рассчитано"
+            lines.append(f"| {attribute} | {label} | {before_text} | {after_text} | {delta_text} | {percent_text} |")
+            table_rows.append({
+                "attribute": attribute,
+                "metric": metric,
+                "before": before,
+                "after": after,
+                "absolute_change": delta,
+                "percent_change": percent,
+                "suppressed": bool(suppressed),
+            })
+
+    if include_correlations:
+        lines.extend([
+            "", "**Корреляции**", "",
+            "| Атрибуты | Метод | До | После | Абсолютное изменение |",
+            "|---|---|---:|---:|---:|",
+        ])
+        for item in utility.get("correlations", []):
+            lines.append(
+                f"| {_table_cell(item.get('attribute_1'), 'text')} / {_table_cell(item.get('attribute_2'), 'text')} | {_table_cell(item.get('method'), 'text')} | "
+                f"{_table_cell(item.get('coefficient_before'))} | {_table_cell(item.get('coefficient_after'))} | "
+                f"{_table_cell(item.get('absolute_change'))} |"
+            )
+
+    summary = utility.get("summary", {})
+    lines.extend([
+        "",
+        "**Изменение структуры набора**",
+        "",
+        "| Показатель | Значение |",
+        "|---|---:|",
+        f"| Строк до | {_table_cell(summary.get('original_rows'), 'count')} |",
+        f"| Строк после | {_table_cell(summary.get('transformed_rows'), 'count')} |",
+        f"| Общих атрибутов | {_table_cell(summary.get('common_columns'), 'count')} |",
+        f"| Удалено атрибутов | {_table_cell(summary.get('removed_columns'), 'count')} |",
+        f"| Добавлено атрибутов | {_table_cell(summary.get('added_columns'), 'count')} |",
+    ])
+    removed_columns = utility.get("removed_columns", [])
+    added_columns = utility.get("added_columns", [])
+    if removed_columns:
+        lines.append("\nУдалённые атрибуты: " + ", ".join(_table_cell(name, "text") for name in removed_columns))
+    if added_columns:
+        lines.append("\nДобавленные атрибуты: " + ", ".join(_table_cell(name, "text") for name in added_columns))
+    lines.extend([
+        "",
+        f"Статус Privacy Release Check: **{result.get('privacy_status', 'unknown')}**.",
+        "Примечание: сравнение описывает статистические изменения и само по себе не доказывает приватность.",
+    ])
+    return {
+        "ok": True,
+        "available": True,
+        "format": "markdown",
+        "privacy_status": result.get("privacy_status", "unknown"),
+        "selected_attributes": [item.get("attribute") for item in attribute_rows],
+        "selected_metrics": list(selected_metrics),
+        "table_rows": table_rows,
+        "markdown_table": "\n".join(lines),
+        "removed_columns": utility.get("removed_columns", []),
+        "added_columns": utility.get("added_columns", []),
+        "instruction": "Передай markdown_table пользователю без изменения структуры таблицы.",
+    }
 
 def get_privacy_result(registry: DatasetRegistry, dataset_id: str) -> dict[str, Any]:
     try:

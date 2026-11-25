@@ -171,6 +171,10 @@ def _apply_gigachat_function_hints(name: str, parameters: dict[str, Any]) -> Non
         l_variant = properties.get("l_variant")
         if isinstance(l_variant, dict):
             l_variant.setdefault("enum", ["distinct", "entropy", "both"])
+        default_t = properties.get("default_t")
+        if isinstance(default_t, dict):
+            default_t.setdefault("minimum", 0)
+            default_t.setdefault("maximum", 1)
         properties["operations"].setdefault("description", "Список операций; выбери ровно один способ обработки прямых идентификаторов.")
 
     if name == "preview_profile_changes":

@@ -32,6 +32,8 @@ class KAnonymizationSettings:
     enable_l_diversity: bool = True
     default_l: int = 2
     l_diversity_variant: str = "both"
+    enable_t_closeness: bool = True
+    default_t: float = 0.4
 
 
 @dataclass(frozen=True)
@@ -148,6 +150,18 @@ def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
     l_variant = k_anonymization.get("l_diversity_variant", "both")
     if not isinstance(l_variant, str) or l_variant not in {"distinct", "entropy", "both"}:
         raise ValueError("Вариант l-разнообразия должен быть distinct, entropy или both.")
+    enable_t_closeness = k_anonymization.get("enable_t_closeness", True)
+    if not isinstance(enable_t_closeness, bool):
+        raise ValueError("Параметр enable_t_closeness должен быть логическим.")
+    raw_default_t = k_anonymization.get("default_t", 0.4)
+    if isinstance(raw_default_t, bool):
+        raise ValueError("Порог t должен быть числом от 0 до 1.")
+    try:
+        default_t = float(raw_default_t)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Порог t должен быть числом от 0 до 1.") from error
+    if not math.isfinite(default_t) or not 0 <= default_t <= 1:
+        raise ValueError("Порог t должен быть числом от 0 до 1.")
 
     return AppSettings(
         data_type_analysis=DataTypeAnalysisSettings(
@@ -167,6 +181,8 @@ def load_settings(path: str | Path = DEFAULT_SETTINGS_PATH) -> AppSettings:
             enable_l_diversity=enable_l_diversity,
             default_l=raw_default_l,
             l_diversity_variant=l_variant,
+            enable_t_closeness=enable_t_closeness,
+            default_t=default_t,
         ),
     )
 
@@ -234,6 +250,16 @@ def save_settings(
         raise ValueError("Значение l по умолчанию должно быть целым числом не меньше 2.")
     if not isinstance(k_settings.l_diversity_variant, str) or k_settings.l_diversity_variant not in {"distinct", "entropy", "both"}:
         raise ValueError("Вариант l-разнообразия должен быть distinct, entropy или both.")
+    if not isinstance(k_settings.enable_t_closeness, bool):
+        raise ValueError("Параметр enable_t_closeness должен быть логическим.")
+    if isinstance(k_settings.default_t, bool):
+        raise ValueError("Порог t должен быть числом от 0 до 1.")
+    try:
+        default_t = float(k_settings.default_t)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Порог t должен быть числом от 0 до 1.") from error
+    if not math.isfinite(default_t) or not 0 <= default_t <= 1:
+        raise ValueError("Порог t должен быть числом от 0 до 1.")
 
     payload = {
         "data_type_analysis": {
@@ -253,6 +279,8 @@ def save_settings(
             "enable_l_diversity": k_settings.enable_l_diversity,
             "default_l": k_settings.default_l,
             "l_diversity_variant": k_settings.l_diversity_variant,
+            "enable_t_closeness": k_settings.enable_t_closeness,
+            "default_t": default_t,
         },
     }
     atomic_write_text(

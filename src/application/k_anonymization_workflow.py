@@ -9,6 +9,7 @@ from anonymization.algorithms.k_anonymity import (
     evaluate_qi_profiles,
 )
 from evaluation.privacy.l_diversity import evaluate_l_diversity
+from evaluation.privacy.t_closeness import evaluate_t_closeness
 from infrastructure.file_safety import atomic_write_text
 from infrastructure.attribute_profile_store import (
     DEFAULT_PROFILE_PATH,
@@ -158,6 +159,29 @@ def _not_evaluable_l_report(
         "notes": [reason],
     }
 
+
+class TClosenessViolationError(RuntimeError):
+    def __init__(self, report: dict[str, Any]):
+        self.report = report
+        t_report = report.get("t_closeness", report)
+        failures = [item for item in t_report.get("checks", []) if not item.get("satisfied")]
+        lines = [
+            "t-близость не выполнена. CSV-результат не сохранён.",
+            f"Нарушений: {len(failures)} из {t_report.get('check_count', len(failures))} проверок.",
+            f"Порог t: {t_report.get('t', 'не задан')}.",
+        ]
+        if failures:
+            first = failures[0]
+            lines.append(
+                f"Первое нарушение: профиль «{first.get('profile_name')}», "
+                f"атрибут «{first.get('sensitive_attribute')}», "
+                f"класс {first.get('class_number')}, расстояние={first.get('distance')}, "
+                f"метрика={first.get('metric')}."
+            )
+        lines.append("Подробности сохранены в диагностическом JSON-отчёте.")
+        super().__init__("\n".join(lines))
+
+
 def execute_k_anonymization(
     dataframe: pd.DataFrame,
     source_csv_path: str | Path,
@@ -167,6 +191,8 @@ def execute_k_anonymization(
     enable_l_diversity: bool = False,
     default_l: int = 2,
     l_variant: str = "both",
+    enable_t_closeness: bool = False,
+    default_t: float = 0.4,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     semantic_types = load_semantic_types(source_csv_path, profile_path)
     profiles = load_quasi_identifier_groups(source_csv_path, profile_path)
@@ -214,6 +240,34 @@ def execute_k_anonymization(
         report["l_diversity"] = {
             "status": "not_checked",
             "reason": "Проверка l-разнообразия выключена в настройках.",
+        }
+
+    if enable_t_closeness:
+        overrides = load_manual_role_overrides(source_csv_path, profile_path)
+        sensitive_attributes, excluded_direct = _select_l_sensitive_attributes(
+            overrides, result.columns
+        )
+        t_report = evaluate_t_closeness(
+            result,
+            profiles,
+            sensitive_attributes,
+            t_value=default_t,
+            semantic_types=semantic_types,
+        )
+        t_report["excluded_sensitive_direct_identifiers"] = excluded_direct
+        report["t_closeness"] = t_report
+        if t_report["status"] == "failed":
+            raise TClosenessViolationError({**report, "status": "t_closeness_failed"})
+        if t_report["status"] == "not_evaluable":
+            report["notes"].append("t-близость включена, но не может быть рассчитана: " + str(t_report.get("reason")))
+        else:
+            report["notes"].append(
+                f"Проверка t-близости пройдена при t={default_t:g}."
+            )
+    else:
+        report["t_closeness"] = {
+            "status": "not_checked",
+            "reason": "Проверка t-близости выключена в настройках.",
         }
     return result, report
 

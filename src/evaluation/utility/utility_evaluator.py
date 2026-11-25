@@ -63,26 +63,46 @@ def _relative_change(before: float | None, after: float | None) -> float | None:
     return float((after - before) / abs(before) * 100.0)
 
 
+def _series_distribution_metrics(series: pd.Series) -> dict[str, float | int | None]:
+    values = series.dropna()
+    if values.empty:
+        return {"unique": 0, "entropy_bits": None, "mode_frequency_percent": None}
+    frequencies = values.astype("string").value_counts(dropna=True)
+    probabilities = frequencies.to_numpy(dtype=float) / float(frequencies.sum())
+    entropy = float(-(probabilities * np.log2(probabilities)).sum()) if len(probabilities) else None
+    return {
+        "unique": int(values.nunique(dropna=True)),
+        "entropy_bits": entropy,
+        "mode_frequency_percent": float(frequencies.iloc[0] / frequencies.sum() * 100.0),
+    }
+
+
 def _numeric_metrics(series: pd.Series) -> dict[str, float | int | None]:
     values = _numeric_series(series).dropna()
+    distribution = _series_distribution_metrics(values)
     if values.empty:
         return {
-            "mean": None,
-            "variance": None,
-            "median": None,
-            "q1": None,
-            "q3": None,
-            "iqr": None,
+            "mean": None, "variance": None, "stddev": None, "median": None,
+            "q1": None, "q3": None, "iqr": None, "minimum": None,
+            "maximum": None, "skewness": None, "kurtosis": None,
+            **distribution,
         }
     q1 = float(values.quantile(0.25, interpolation="linear"))
     q3 = float(values.quantile(0.75, interpolation="linear"))
+    variance = float(values.var(ddof=1)) if len(values) >= 2 else None
     return {
         "mean": float(values.mean()),
-        "variance": float(values.var(ddof=1)) if len(values) >= 2 else None,
+        "variance": variance,
+        "stddev": float(np.sqrt(variance)) if variance is not None and variance >= 0 else None,
         "median": float(values.median()),
         "q1": q1,
         "q3": q3,
         "iqr": q3 - q1,
+        "minimum": float(values.min()),
+        "maximum": float(values.max()),
+        "skewness": float(values.skew()) if len(values) >= 3 else None,
+        "kurtosis": float(values.kurt()) if len(values) >= 4 else None,
+        **distribution,
     }
 
 
@@ -150,8 +170,11 @@ def evaluate_utility(
             data_kind = "Числовой"
         else:
             categorical_count += 1
-            before_metrics = {key: None for key in ("mean", "variance", "median", "q1", "q3", "iqr")}
-            after_metrics = before_metrics.copy()
+            before_metrics = _series_distribution_metrics(before)
+            after_metrics = _series_distribution_metrics(after)
+            for key in ("mean", "variance", "stddev", "median", "q1", "q3", "iqr", "minimum", "maximum", "skewness", "kurtosis"):
+                before_metrics[key] = None
+                after_metrics[key] = None
             mean_change = None
             variance_change = None
             tvd = _distribution_tvd(before, after)
@@ -174,8 +197,28 @@ def evaluate_utility(
             "Изменение дисперсии, %": variance_change,
             "Медиана до": before_metrics["median"],
             "Медиана после": after_metrics["median"],
+            "Q1 до": before_metrics["q1"],
+            "Q1 после": after_metrics["q1"],
+            "Q3 до": before_metrics["q3"],
+            "Q3 после": after_metrics["q3"],
             "IQR до": before_metrics["iqr"],
             "IQR после": after_metrics["iqr"],
+            "Стандартное отклонение до": before_metrics["stddev"],
+            "Стандартное отклонение после": after_metrics["stddev"],
+            "Минимум до": before_metrics["minimum"],
+            "Минимум после": after_metrics["minimum"],
+            "Максимум до": before_metrics["maximum"],
+            "Максимум после": after_metrics["maximum"],
+            "Асимметрия до": before_metrics["skewness"],
+            "Асимметрия после": after_metrics["skewness"],
+            "Эксцесс до": before_metrics["kurtosis"],
+            "Эксцесс после": after_metrics["kurtosis"],
+            "Энтропия до, бит": before_metrics["entropy_bits"],
+            "Энтропия после, бит": after_metrics["entropy_bits"],
+            "Частота моды до, %": before_metrics["mode_frequency_percent"],
+            "Частота моды после, %": after_metrics["mode_frequency_percent"],
+            "Уникальных до": before_metrics["unique"],
+            "Уникальных после": after_metrics["unique"],
             "TVD категорий": tvd,
         })
 

@@ -54,12 +54,15 @@ SYSTEM_PROMPT = """
    используй возвращённый privacy.status как статус именно последнего запуска; не переноси
    блокировку из предыдущего запуска на новый результат.
 8. Используй только операции tokenize_direct_identifiers, remove_direct_identifiers и k_anonymity.
-   Токенизация и удаление взаимоисключающие. l-разнообразие является проверкой после k, не отдельным
-   преобразованием. Не меняй глобальные настройки приложения через MCP.
+   Токенизация и удаление взаимоисключающие. l-разнообразие и t-близость являются проверками после k,
+   а не отдельными преобразованиями. Для t используй нормализованную EMD числовых/временных полей и
+   TVD для номинальных категорий. Не меняй глобальные настройки приложения через MCP.
 9. Путь результата должен быть относительным и находиться в разрешённой рабочей папке.
    Не запрашивай абсолютные пути и не предлагай перезаписать исходный CSV.
-10. Для сравнения исходного и анонимизированного набора до/после используй get_utility_result:
-    он возвращает агрегированные изменения по атрибутам и корреляциям. analyze_anonymized_result
+10. Для сравнения исходного и анонимизированного набора до/после используй get_utility_result.
+    Если пользователь просит оформленную таблицу или выбирает конкретные атрибуты/показатели,
+    вызови get_utility_table и передай markdown_table без изменения структуры. Не собирай таблицу
+    вручную из отдельных чисел. analyze_anonymized_result
     анализирует только итоговую таблицу и не заменяет сравнение до/после. Используй только реализованные
     статистику, Pearson/Spearman и Utility Evaluation. Не обещай SQL, произвольные запросы, регрессию,
     графики или методы, которых нет среди MCP-инструментов.
@@ -67,9 +70,9 @@ SYSTEM_PROMPT = """
     подробные метрики полезности заблокированного результата. Используй privacy_checks и
     blocked_checks, чтобы назвать конкретные проверки со статусом blocked. Сам факт сокрытия
     подробных метрик не доказывает, что сравнение не выполнялось локально. Статус warning означает,
-    что выпуск не заблокирован, но есть непроверенные/предупреждающие условия. Если l не проверялась
-    или not_evaluable, сообщи об этом явно и не называй это провалом l-проверки.
-12. Токенизация — псевдонимизация, не гарантия необратимой анонимности. Успешные проверки k/l
+    что выпуск не заблокирован, но есть непроверенные/предупреждающие условия. Если l или t не
+    проверялись либо получили not_evaluable, сообщи об этом явно и не называй это провалом проверки.
+12. Токенизация — псевдонимизация, не гарантия необратимой анонимности. Успешные проверки k/l/t
     не являются абсолютной гарантией невозможности повторной идентификации.
 13. Не проси пользователя вставлять в чат исходные строки, ФИО, email, телефоны, идентификаторы
     или другие значения из CSV. Пользовательский текст сам отправляется в GigaChat; не проси вводить
@@ -115,7 +118,8 @@ class GigaChatConversation:
         if not self.functions:
             raise RuntimeError("MCP Server не предоставил ни одного инструмента.")
         required_local_tools = {
-            "get_dataset_profile", "suggest_qi_groups", "get_privacy_result", "get_utility_result",
+            "get_dataset_profile", "suggest_qi_groups", "get_privacy_result",
+            "get_utility_result", "get_utility_table",
         }
         missing_local_tools = sorted(required_local_tools - self.function_names)
         if missing_local_tools:
@@ -243,6 +247,12 @@ class GigaChatConversation:
             enable_l = "k_anonymity" in operations
         default_l = int(l_match.group(1)) if l_match else getattr(k_settings, "default_l", 2)
         l_variant = getattr(k_settings, "l_diversity_variant", "both")
+        t_match = re.search(r"\bt\s*=\s*(0(?:[.,]\d+)?|1(?:[.,]0+)?)\b", text)
+        t_disabled = bool(re.search(r"без\s+t[- ]близости|t[- ]близость\s+не\s+нужна", text))
+        enable_t = bool("k_anonymity" in operations and not t_disabled and getattr(k_settings, "enable_t_closeness", True))
+        default_t = float(t_match.group(1).replace(",", ".")) if t_match else getattr(k_settings, "default_t", 0.4)
+        if t_match:
+            enable_t = "k_anonymity" in operations
         representative = getattr(k_settings, "numeric_representative", "mean")
         return {
             "operations": operations,
@@ -251,6 +261,8 @@ class GigaChatConversation:
             "enable_l_diversity": enable_l,
             "default_l": default_l,
             "l_variant": l_variant,
+            "enable_t_closeness": enable_t,
+            "default_t": default_t,
         }
 
     async def _prepare_local_anonymization(self, plan_arguments: dict[str, Any]) -> None:
@@ -296,6 +308,10 @@ class GigaChatConversation:
             lines.append(f"l-разнообразие: l={plan['l_value']}, вариант={plan.get('l_variant')}")
         else:
             lines.append("l-разнообразие: не включено в этот план")
+        if plan.get("t_value") is not None:
+            lines.append(f"t-близость: t={plan['t_value']}; метрики: {plan.get('t_metric_policy')}")
+        else:
+            lines.append("t-близость: не включена в этот план")
         for warning in plan.get("warnings", []):
             lines.append("Предупреждение: " + str(warning))
         destination = result.get("suggested_destination") or "output/anonymized_result.csv"
@@ -390,7 +406,7 @@ class GigaChatConversation:
             "hierarchies": "get_dataset_profile",
             "suggest_qi_groups": "suggest_qi_groups",
             "privacy_status": "get_privacy_result",
-            "utility_comparison": "get_utility_result",
+            "utility_comparison": "get_utility_table",
         }
         tool_name = tool_by_intent[intent]
         if tool_name not in self.function_names:
@@ -517,25 +533,12 @@ class GigaChatConversation:
             return "\n".join(lines)
 
         if intent == "utility_comparison":
-            privacy_status = result.get("privacy_status", "unknown")
-            lines.append(f"Сравнение до/после: Privacy Release Check = {str(privacy_status).upper()}")
-            utility = result.get("utility") or {}
-            if not utility.get("available"):
-                lines.append(utility.get("message", "Подробное сравнение недоступно."))
-                return "\n".join(lines)
-            summary = utility.get("summary") or {}
-            lines.append("Сводка:")
-            for key, value in summary.items():
-                lines.append(f"- {key}: {value}")
-            for item in utility.get("attributes", []):
-                fields = [f"Атрибут {item.get('attribute')}"]
-                for key in ("mean_before", "mean_after", "variance_before", "variance_after", "median_before", "median_after", "unique_before", "unique_after"):
-                    if key in item:
-                        fields.append(f"{key}={item[key]}")
-                if len(fields) > 1:
-                    lines.append("; ".join(fields))
-            lines.append(f"Корреляций в сравнении: {len(utility.get('correlations', []))}")
-            return "\n".join(lines)
+            if not result.get("available"):
+                return result.get("message", "Сравнение до/после недоступно.")
+            markdown_table = result.get("markdown_table")
+            if not isinstance(markdown_table, str) or not markdown_table.strip():
+                return "Инструмент сравнения не вернул готовую Markdown-таблицу."
+            return markdown_table
 
         return json.dumps(result, ensure_ascii=False, indent=2)
 

@@ -29,6 +29,7 @@ def evaluate_release_readiness(
     k_report: dict[str, Any] | None = None,
     l_diversity_enabled: bool = False,
     profile_path: str | Path = DEFAULT_PROFILE_PATH,
+    t_closeness_enabled: bool = False,
 ) -> dict[str, Any]:
     """Проверяет выбранные ограничения перед использованием результата вне исходной среды."""
     roles = load_manual_role_overrides(source_path, profile_path)
@@ -180,6 +181,39 @@ def evaluate_release_readiness(
             "check": "l-разнообразие",
             "status": WARNING,
             "details": "Нет проверяемых конфиденциальных атрибутов или l-проверка выключена.",
+        })
+
+    t_report = (k_report or {}).get("t_closeness", {})
+    if t_closeness_enabled:
+        if t_report.get("status") == "satisfied":
+            checks.append({
+                "check": "t-близость",
+                "status": PASS,
+                "details": (
+                    f"Проверка пройдена: t={t_report.get('t')}, "
+                    f"максимальное расстояние={t_report.get('maximum_distance')}"
+                ),
+            })
+        elif t_report.get("status") == "failed":
+            checks.append({
+                "check": "t-близость",
+                "status": BLOCKED,
+                "details": (
+                    f"Проверка не пройдена: превышен порог t={t_report.get('t')}; "
+                    f"нарушений={t_report.get('failed_check_count')} из {t_report.get('check_count')}."
+                ),
+            })
+        else:
+            checks.append({
+                "check": "t-близость",
+                "status": WARNING,
+                "details": str(t_report.get("reason", "Проверка не может быть выполнена.")),
+            })
+    else:
+        checks.append({
+            "check": "t-близость",
+            "status": WARNING,
+            "details": "t-близость не проверялась в этом запуске.",
         })
 
     if unclassified_columns:

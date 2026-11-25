@@ -15,6 +15,7 @@ from application.anonymization_workflow import (
     apply_anonymization_operations,
 )
 from application.session_workflow import DatasetSession
+from application.k_anonymization_workflow import LDiversityViolationError, TClosenessViolationError
 from data_processing.csv_handler import save_csv
 from evaluation.privacy.release_check import evaluate_release_readiness
 from evaluation.utility.utility_evaluator import UtilityEvaluation, evaluate_utility
@@ -44,6 +45,8 @@ def prepare_anonymization_plan(
     default_l: int = 2,
     l_variant: str = "both",
     profile_path: str | Path = DEFAULT_PROFILE_PATH,
+    enable_t_closeness: bool = False,
+    default_t: float = 0.4,
 ) -> dict[str, Any]:
     """Формирует проверяемый план без изменения таблицы и файлов."""
     if not operations:
@@ -144,6 +147,14 @@ def prepare_anonymization_plan(
                 "Настройте иерархии в расширенных настройках QI."
             )
 
+    if enable_t_closeness and K_ANONYMITY in operations:
+        if isinstance(default_t, bool) or not isinstance(default_t, (int, float)) or not pd.notna(default_t) or not 0 <= float(default_t) <= 1:
+            raise ValueError("Порог t должен быть числом от 0 до 1.")
+        if not sensitive:
+            plan_warnings.append(
+                "t-близость включена, но конфиденциальные атрибуты не назначены; проверка будет not_evaluable."
+            )
+
     if enable_l_diversity and K_ANONYMITY in operations:
         if isinstance(default_l, bool) or not isinstance(default_l, int) or default_l < 2:
             raise ValueError("Значение l должно быть целым числом не меньше 2.")
@@ -176,10 +187,12 @@ def prepare_anonymization_plan(
             }
             for group in active_groups
         ] if K_ANONYMITY in operations else [],
-        "sensitive_attributes": sensitive if enable_l_diversity else [],
-        "excluded_sensitive_direct_identifiers": excluded_sensitive if enable_l_diversity else [],
+        "sensitive_attributes": sensitive if (enable_l_diversity or enable_t_closeness) else [],
+        "excluded_sensitive_direct_identifiers": excluded_sensitive if (enable_l_diversity or enable_t_closeness) else [],
         "l_value": default_l if enable_l_diversity and K_ANONYMITY in operations else None,
         "l_variant": l_variant if enable_l_diversity and K_ANONYMITY in operations else None,
+        "t_value": float(default_t) if enable_t_closeness and K_ANONYMITY in operations else None,
+        "t_metric_policy": "numeric/date: normalized EMD; nominal categorical: total variation" if enable_t_closeness and K_ANONYMITY in operations else None,
         "requires_confirmation": True,
         "warnings": plan_warnings + ([
             "Токенизация является псевдонимизацией, а не доказательством анонимности."
@@ -198,6 +211,8 @@ def execute_anonymization_for_session(
     l_variant: str = "both",
     profile_path: str | Path = DEFAULT_PROFILE_PATH,
     overwrite: bool = False,
+    enable_t_closeness: bool = False,
+    default_t: float = 0.4,
 ) -> SessionExecutionResult:
     """Выполняет анонимизацию, сохраняет результат и оценивает его в рамках той же сессии."""
     output_path = validate_output_file(destination)
@@ -217,18 +232,45 @@ def execute_anonymization_for_session(
         default_l,
         l_variant,
         profile_path,
+        enable_t_closeness,
+        default_t,
     )
-    execution = apply_anonymization_operations(
-        session.source_dataframe,
-        session.source_path,
-        operations,
-        profile_path=profile_path,
-        default_k=default_k,
-        representative=representative,
-        enable_l_diversity=enable_l_diversity,
-        default_l=default_l,
-        l_variant=l_variant,
-    )
+    try:
+        execution = apply_anonymization_operations(
+            session.source_dataframe,
+            session.source_path,
+            operations,
+            profile_path=profile_path,
+            default_k=default_k,
+            representative=representative,
+            enable_l_diversity=enable_l_diversity,
+            default_l=default_l,
+            l_variant=l_variant,
+            enable_t_closeness=enable_t_closeness,
+            default_t=default_t,
+        )
+    except (LDiversityViolationError, TClosenessViolationError) as error:
+        # A failed privacy validation belongs to the latest attempt. Do not leave a
+        # previous READY status visible after a new run has been rejected.
+        is_t_failure = isinstance(error, TClosenessViolationError)
+        report_key = "t_closeness" if is_t_failure else "l_diversity"
+        check_name = "t-близость" if is_t_failure else "l-разнообразие"
+        failure_report = error.report.get(report_key, error.report)
+        session.release_check = {
+            "status": "blocked",
+            "status_label": "Передача заблокирована",
+            "checks": [{
+                "check": check_name,
+                "status": "blocked",
+                "details": str(error),
+            }],
+            "operations": list(operations),
+            "failed_attempt": True,
+            "failed_check_count": failure_report.get("failed_check_count"),
+            "check_count": failure_report.get("check_count"),
+        }
+        session.k_report = error.report
+        raise
 
     release_check = evaluate_release_readiness(
         session.source_dataframe,
@@ -238,6 +280,7 @@ def execute_anonymization_for_session(
         execution.k_report,
         l_diversity_enabled=enable_l_diversity and K_ANONYMITY in execution.operations,
         profile_path=profile_path,
+        t_closeness_enabled=enable_t_closeness and K_ANONYMITY in execution.operations,
     )
     roles = load_manual_role_overrides(session.source_path, profile_path)
     semantic_types = load_semantic_types(session.source_path, profile_path)
